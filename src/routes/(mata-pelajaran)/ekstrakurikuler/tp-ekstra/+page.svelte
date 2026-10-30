@@ -1,7 +1,10 @@
 <script lang="ts">
-	import { invalidate } from '$app/navigation';
+	import { goto, invalidate } from '$app/navigation';
+	import { page } from '$app/state';
 	import FormEnhance from '$lib/components/form-enhance.svelte';
 	import Icon from '$lib/components/icon.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 
 	let {
 		data
@@ -10,8 +13,26 @@
 			ekstrakurikuler: Ekstrakurikuler;
 			tujuan: EkstrakurikulerTujuan[];
 			tujuanTableReady: boolean;
+			q?: string;
+			kosongKarenaFilter?: boolean;
 		};
 	} = $props();
+
+	const KUNCI_FILTER = ['q'];
+
+	// svelte-ignore state_referenced_locally
+	let searchTerm = $state(data.q ?? '');
+
+	$effect(() => {
+		const latestQ = data.q ?? '';
+		if (searchTerm !== latestQ) {
+			searchTerm = latestQ;
+		}
+	});
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
 
 	let selectedIds = $state<number[]>([]);
 	let selectAllCheckbox: HTMLInputElement | null = null;
@@ -144,9 +165,22 @@
 					<Icon name="del" />
 					Hapus TP
 				</button>
-			{:else}
+			{/if}
+		</div>
+	</div>
+
+	<div class="mb-4">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder="Cari tujuan pembelajaran..."
+			onSearch={(value) => terapkanFilter('q', value)}
+			aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+			onReset={() =>
+				goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+		>
+			{#if !anySelected}
 				<button
-					class={`btn btn-soft w-full shadow-none sm:max-w-40 ${isCreateMode ? 'btn-error' : ''}`}
+					class={`btn btn-soft w-full shadow-none sm:w-auto ${isCreateMode ? 'btn-error' : ''}`}
 					type="button"
 					onclick={isCreateMode ? closeForm : openCreateForm}
 					disabled={!canManage || isEditMode}
@@ -155,7 +189,7 @@
 					{isCreateMode ? 'Batal' : 'Tambah TP'}
 				</button>
 			{/if}
-		</div>
+		</FilterToolbar>
 	</div>
 
 	{#if !data.tujuanTableReady}
@@ -354,7 +388,9 @@
 				{:else}
 					<tr>
 						<td class="py-6 text-center italic opacity-60" colspan="4">
-							Belum ada tujuan ekstrakurikuler
+							{data.kosongKarenaFilter
+								? 'Tidak ada yang cocok dengan filter'
+								: 'Belum ada tujuan ekstrakurikuler'}
 						</td>
 					</tr>
 				{/if}

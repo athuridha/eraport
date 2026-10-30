@@ -414,7 +414,7 @@ export const actions = {
 			} else {
 				const [pegawai] = await tx
 					.insert(tablePegawai)
-					.values({ nama: namaGuru, nip: '', updatedAt: new Date().toISOString() })
+					.values({ nama: namaGuru, nip: '', sekolahId, updatedAt: new Date().toISOString() })
 					.returning({ id: tablePegawai.id });
 				newWaliPegawaiId = pegawai?.id ?? null;
 			}

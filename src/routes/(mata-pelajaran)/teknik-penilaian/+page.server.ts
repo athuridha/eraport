@@ -5,10 +5,10 @@ import {
 	seedDefaultTeknikPenilaian
 } from '$lib/server/db/ensure-teknik-penilaian';
 import { fail, redirect } from '@sveltejs/kit';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, like, or, sql } from 'drizzle-orm';
 import { isAuthorizedUser } from '../../pengguna/permissions';
 
-export async function load({ locals }) {
+export async function load({ locals, url }) {
 	if (!locals.user) throw redirect(303, '/login');
 	if (!isAuthorizedUser(['mata_pelajaran_intrakurikuler'], locals.user)) {
 		throw redirect(303, '/forbidden?required=mata_pelajaran_intrakurikuler');
@@ -19,15 +19,29 @@ export async function load({ locals }) {
 	const sekolahId = locals.sekolah?.id;
 	if (!sekolahId) throw redirect(303, '/');
 
+	const q = url.searchParams.get('q')?.trim() ?? '';
+	const searchCondition = q
+		? or(
+				like(tableTeknikPenilaian.nama, `%${q}%`),
+				like(tableTeknikPenilaian.singkatan, `%${q}%`),
+				like(tableTeknikPenilaian.keterangan, `%${q}%`)
+			)
+		: undefined;
+
 	// Auto-seed if empty
 	const countRows = await db
 		.select({ count: sql<number>`count(*)` })
 		.from(tableTeknikPenilaian)
 		.where(eq(tableTeknikPenilaian.sekolahId, sekolahId));
 
-	if ((countRows[0]?.count ?? 0) === 0) {
+	const totalSemua = countRows[0]?.count ?? 0;
+	if (totalSemua === 0) {
 		await seedDefaultTeknikPenilaian(sekolahId);
 	}
+
+	const whereCondition = searchCondition
+		? and(eq(tableTeknikPenilaian.sekolahId, sekolahId), searchCondition)
+		: eq(tableTeknikPenilaian.sekolahId, sekolahId);
 
 	const rows = await db
 		.select({
@@ -43,7 +57,7 @@ export async function load({ locals }) {
 			tableTujuanPembelajaran,
 			eq(tableTujuanPembelajaran.teknikPenilaianId, tableTeknikPenilaian.id)
 		)
-		.where(eq(tableTeknikPenilaian.sekolahId, sekolahId))
+		.where(whereCondition)
 		.groupBy(tableTeknikPenilaian.id)
 		.orderBy(asc(tableTeknikPenilaian.urutan), asc(tableTeknikPenilaian.nama));
 
@@ -54,7 +68,9 @@ export async function load({ locals }) {
 
 	return {
 		sekolahNama: sekolah?.nama ?? 'Sekolah',
-		daftarTeknik: rows
+		daftarTeknik: rows,
+		q,
+		kosongKarenaFilter: totalSemua > 0 && rows.length === 0 && Boolean(q)
 	};
 }
 

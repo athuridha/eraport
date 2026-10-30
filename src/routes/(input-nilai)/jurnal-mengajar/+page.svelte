@@ -6,9 +6,16 @@
 	import { hideModal, showModal } from '$lib/components/global-modal.svelte';
 	import { toast } from '$lib/components/toast.svelte';
 	import TambahJurnalModal from '$lib/components/jurnal-mengajar/tambah-jurnal-modal.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { countActiveFilters, resetFilters, setFilter } from '$lib/utils/url-filter';
 	import SvelteURLSearchParams from '$lib/svelte-helpers/url-search-params';
 
 	let { data } = $props();
+
+	const KUNCI_FILTER = ['q', 'tanggal', 'mapel_id'];
+
+	// svelte-ignore state_referenced_locally
+	let searchTerm = $state(data.q ?? '');
 
 	const currentPage = $derived.by(() => data.page.currentPage ?? 1);
 	const totalPages = $derived.by(() => Math.max(1, data.page.totalPages ?? 1));
@@ -41,6 +48,10 @@
 	const canEdit = $derived(userType !== 'wali_asuh');
 
 	let selectedTanggal = $derived(data.tanggal ?? '');
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
 
 	function applyNavigation(update: (params: SvelteURLSearchParams) => void) {
 		const params = new SvelteURLSearchParams(page.url.search);
@@ -209,32 +220,53 @@
 		</button>
 	</div>
 
-	<div class="join mb-4">
-		<input
-			type="date"
-			class="input bg-base-200 dark:bg-base-300 join-item w-full max-w-48 dark:border-none"
-			bind:value={selectedTanggal}
-		/>
-		<button
-			type="button"
-			class="btn btn-soft join-item shadow-none"
-			aria-label="Lihat jurnal"
-			title="Lihat jurnal"
-			onclick={viewDate}
-		>
-			<Icon name="eye" />
-		</button>
-		<button
-			type="button"
-			class="btn btn-soft join-item shadow-none"
-			aria-label="Kembali ke hari ini"
-			title="Kembali ke hari ini"
-			onclick={resetToToday}
-			disabled={!data.tanggal}
-		>
-			<Icon name="repeat" />
-		</button>
-	</div>
+	<FilterToolbar
+		bind:q={searchTerm}
+		qPlaceholder="Cari materi/kegiatan..."
+		onSearch={(value) => terapkanFilter('q', value)}
+		pilih={[
+			{
+				name: 'mapel_id',
+				label: 'Mata Pelajaran',
+				value: data.mapelId ? String(data.mapelId) : '',
+				opsis: [
+					{ value: '', label: 'Semua Mapel' },
+					...data.mataPelajaranList.map((m) => ({ value: String(m.id), label: m.nama }))
+				],
+				onChange: (v) => terapkanFilter('mapel_id', v)
+			}
+		]}
+		aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+		onReset={() =>
+			goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+	>
+		<div class="join">
+			<input
+				type="date"
+				class="input bg-base-200 dark:bg-base-300 join-item w-full max-w-48 dark:border-none"
+				bind:value={selectedTanggal}
+			/>
+			<button
+				type="button"
+				class="btn btn-soft join-item shadow-none"
+				aria-label="Lihat jurnal"
+				title="Lihat jurnal"
+				onclick={viewDate}
+			>
+				<Icon name="eye" />
+			</button>
+			<button
+				type="button"
+				class="btn btn-soft join-item shadow-none"
+				aria-label="Kembali ke hari ini"
+				title="Kembali ke hari ini"
+				onclick={resetToToday}
+				disabled={!data.tanggal}
+			>
+				<Icon name="repeat" />
+			</button>
+		</div>
+	</FilterToolbar>
 
 	<div
 		class="bg-base-100 dark:bg-base-200 mt-4 overflow-x-auto rounded-md shadow-md dark:shadow-none"
@@ -301,7 +333,9 @@
 				{:else}
 					<tr>
 						<td class="p-7 text-center italic opacity-60" colspan="6">
-							Belum ada jurnal mengajar
+							{data.kosongKarenaFilter
+								? 'Tidak ada jurnal yang cocok dengan filter'
+								: 'Belum ada jurnal mengajar'}
 						</td>
 					</tr>
 				{/each}

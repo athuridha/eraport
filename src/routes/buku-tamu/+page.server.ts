@@ -2,7 +2,7 @@ import { ensureBukuTamuSchema } from '$lib/server/db/ensure-buku-tamu';
 import { tableBukuTamu } from '$lib/server/db/schema';
 import db from '$lib/server/db';
 import { redirect } from '@sveltejs/kit';
-import { desc, sql, like } from 'drizzle-orm';
+import { and, desc, sql, like } from 'drizzle-orm';
 import { isAdminUser } from '../pengguna/permissions';
 
 const PER_PAGE = 20;
@@ -44,11 +44,19 @@ export async function load({ locals, url, depends }) {
 		Number.isFinite(requestedPage) && requestedPage > 0 ? Math.floor(requestedPage) : 1;
 
 	const searchFilter = search ? like(tableBukuTamu.nama, `%${search}%`) : undefined;
+	const dari = url.searchParams.get('dari')?.trim() || null;
+	const sampai = url.searchParams.get('sampai')?.trim() || null;
+	// `created_at` is an ISO text column; `date()` normalizes it for range comparison.
+	const tanggalFilter = and(
+		dari ? sql`date(${tableBukuTamu.createdAt}) >= date(${dari})` : undefined,
+		sampai ? sql`date(${tableBukuTamu.createdAt}) <= date(${sampai})` : undefined
+	);
+	const filter = and(searchFilter, tanggalFilter);
 
 	const [{ totalItems }] = await db
 		.select({ totalItems: sql<number>`count(*)` })
 		.from(tableBukuTamu)
-		.where(searchFilter);
+		.where(filter);
 
 	const total = totalItems ?? 0;
 	const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
@@ -67,7 +75,7 @@ export async function load({ locals, url, depends }) {
 			createdAt: tableBukuTamu.createdAt
 		})
 		.from(tableBukuTamu)
-		.where(searchFilter)
+		.where(filter)
 		.orderBy(desc(tableBukuTamu.createdAt))
 		.limit(PER_PAGE)
 		.offset(offset);

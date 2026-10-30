@@ -156,15 +156,63 @@
 		})
 	);
 
+	let searchMapel = $state('');
+	let searchedMataPelajaran = $derived.by(() => {
+		const q = searchMapel.trim().toLowerCase();
+		if (!q) return filteredMataPelajaran;
+		return filteredMataPelajaran.filter((m) => (m.nama ?? '').toLowerCase().includes(q));
+	});
+
+	let someSearchedMapelSelected = $derived(
+		searchedMataPelajaran.length > 0 &&
+			searchedMataPelajaran.some((m) => mataPelajaranIds.has(m.id))
+	);
+	let allSearchedMapelSelected = $derived(
+		searchedMataPelajaran.length > 0 &&
+			searchedMataPelajaran.every((m) => mataPelajaranIds.has(m.id))
+	);
+
+	function toggleSelectAllSearchedMapel() {
+		if (allSearchedMapelSelected) {
+			for (const m of searchedMataPelajaran) mataPelajaranIds.delete(m.id);
+		} else {
+			for (const m of searchedMataPelajaran) mataPelajaranIds.add(m.id);
+		}
+		mataPelajaranIds = new Set(mataPelajaranIds);
+	}
+
 	let filteredKelasList = $derived.by(() => {
 		if (!sekolahId) return data.kelasList ?? [];
 		const sId = Number(sekolahId);
 		return (data.kelasList ?? []).filter((k: { sekolahId?: number | null }) => k.sekolahId === sId);
 	});
 
-	let allKelasSelected = $derived(
-		filteredKelasList.length > 0 && filteredKelasList.every((k) => kelasIds.has(k.id))
+	let searchKelas = $state('');
+	let searchedKelasList = $derived.by(() => {
+		const q = searchKelas.trim().toLowerCase();
+		if (!q) return filteredKelasList;
+		return filteredKelasList.filter((k) => {
+			const namaMatch = (k.nama ?? '').toLowerCase().includes(q);
+			const faseMatch = (k.fase ?? '').toLowerCase().includes(q);
+			return namaMatch || faseMatch;
+		});
+	});
+
+	let someSearchedKelasSelected = $derived(
+		searchedKelasList.length > 0 && searchedKelasList.some((k) => kelasIds.has(k.id))
 	);
+	let allSearchedKelasSelected = $derived(
+		searchedKelasList.length > 0 && searchedKelasList.every((k) => kelasIds.has(k.id))
+	);
+
+	function toggleSelectAllSearchedKelas() {
+		if (allSearchedKelasSelected) {
+			for (const k of searchedKelasList) kelasIds.delete(k.id);
+		} else {
+			for (const k of searchedKelasList) kelasIds.add(k.id);
+		}
+		kelasIds = new Set(kelasIds);
+	}
 
 	const visibleKelasCount = $derived(filteredKelasList.filter((k) => kelasIds.has(k.id)).length);
 
@@ -201,15 +249,6 @@
 			kelasIds.delete(id);
 		} else {
 			kelasIds.add(id);
-		}
-		kelasIds = new Set(kelasIds);
-	}
-
-	function toggleSelectAllKelas() {
-		if (allKelasSelected) {
-			for (const k of filteredKelasList) kelasIds.delete(k.id);
-		} else {
-			for (const k of filteredKelasList) kelasIds.add(k.id);
 		}
 		kelasIds = new Set(kelasIds);
 	}
@@ -267,7 +306,7 @@
 						{/if}
 					</summary>
 					<div class="collapse-content text-sm">
-						<div class="space-y-3">
+						<div class="space-y-3 pt-1">
 							{#if isAdminRole}
 								<div
 									class="alert alert-info bg-info/10 text-info-content border-info/20 text-xs py-2"
@@ -284,28 +323,124 @@
 									langkah ini, karena bawaan Wali Kelas sudah punya akses ke semua mata pelajaran.
 								</p>
 							{/if}
-							{#if mataPelajaranIds.size > 0}
-								<button
-									type="button"
-									class="btn btn-xs btn-outline btn-error shadow-none"
-									onclick={clearMapel}
-								>
-									Kosongkan pilihan mata pelajaran
-								</button>
-							{/if}
+
 							{#if filteredMataPelajaran.length > 0}
-								<div class="space-y-2">
-									{#each filteredMataPelajaran as m (m.id)}
-										<label class="flex cursor-pointer gap-2">
-											<input
-												type="checkbox"
-												class="checkbox checkbox-sm"
-												checked={mataPelajaranIds.has(m.id)}
-												onchange={() => toggleMapel(m.id)}
-											/>
-											<span class="text-sm">{m.nama}</span>
-										</label>
-									{/each}
+								<!-- Toolbar Pencarian & Aksi -->
+								<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+									<div class="relative flex-1">
+										<Icon
+											name="search"
+											class="text-base-content/50 pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
+										/>
+										<input
+											type="text"
+											placeholder="Cari mata pelajaran..."
+											bind:value={searchMapel}
+											onkeydown={(e) => {
+												if (e.key === 'Enter') e.preventDefault();
+											}}
+											class="input input-sm bg-base-100 border-base-300 w-full rounded-lg pl-9 pr-8"
+										/>
+										{#if searchMapel}
+											<button
+												type="button"
+												class="btn btn-ghost btn-xs btn-circle absolute right-1.5 top-1/2 -translate-y-1/2"
+												onclick={() => (searchMapel = '')}
+												aria-label="Bersihkan pencarian"
+											>
+												<Icon name="close" class="h-3.5 w-3.5" />
+											</button>
+										{/if}
+									</div>
+									{#if mataPelajaranIds.size > 0}
+										<button
+											type="button"
+											class="btn btn-xs btn-outline btn-error shadow-none shrink-0"
+											onclick={clearMapel}
+										>
+											Kosongkan pilihan ({mataPelajaranIds.size})
+										</button>
+									{/if}
+								</div>
+
+								<!-- Tabel Mata Pelajaran -->
+								<div
+									class="max-h-72 overflow-x-auto overflow-y-auto rounded-lg border border-base-300 bg-base-100"
+								>
+									<table class="table table-sm w-full">
+										<thead class="sticky top-0 z-10 bg-base-200">
+											<tr>
+												<th class="w-12 text-center">
+													<input
+														type="checkbox"
+														class="checkbox checkbox-xs"
+														checked={allSearchedMapelSelected}
+														indeterminate={someSearchedMapelSelected && !allSearchedMapelSelected}
+														onchange={toggleSelectAllSearchedMapel}
+														disabled={searchedMataPelajaran.length === 0}
+														title="Pilih semua yang tampil"
+														aria-label="Pilih semua mata pelajaran yang tampil"
+													/>
+												</th>
+												<th>Mata Pelajaran</th>
+												<th class="w-24 text-center">Status</th>
+											</tr>
+										</thead>
+										<tbody>
+											{#if searchedMataPelajaran.length === 0}
+												<tr>
+													<td colspan="3" class="text-center py-6 text-base-content/60 text-xs">
+														Tidak ada data yang cocok dengan pencarian.
+													</td>
+												</tr>
+											{:else}
+												{#each searchedMataPelajaran as m (m.id)}
+													{@const selected = mataPelajaranIds.has(m.id)}
+													<tr
+														class="cursor-pointer transition-colors hover:bg-base-200/60 {selected
+															? 'bg-primary/10'
+															: ''}"
+														onclick={() => toggleMapel(m.id)}
+													>
+														<td class="text-center">
+															<input
+																type="checkbox"
+																class="checkbox checkbox-xs checkbox-primary"
+																checked={selected}
+																onclick={(e) => e.stopPropagation()}
+																onchange={() => toggleMapel(m.id)}
+																aria-label={`Pilih ${m.nama}`}
+															/>
+														</td>
+														<td class="font-medium text-sm">
+															{m.nama}
+														</td>
+														<td class="text-center">
+															{#if selected}
+																<span class="badge badge-xs badge-primary font-medium"
+																	>Terpilih</span
+																>
+															{:else}
+																<span class="text-xs opacity-40">-</span>
+															{/if}
+														</td>
+													</tr>
+												{/each}
+											{/if}
+										</tbody>
+									</table>
+								</div>
+
+								<div class="flex items-center justify-between text-xs text-base-content/60 px-1">
+									<span>
+										Menampilkan {searchedMataPelajaran.length} dari {filteredMataPelajaran.length} mata
+										pelajaran
+									</span>
+									{#if mataPelajaranIds.size > 0}
+										<span class="font-medium text-primary">
+											{mataPelajaranIds.size} dipilih
+										</span>
+									{/if}
 								</div>
 							{:else}
 								<p class="text-xs opacity-75">- tidak ada mata pelajaran -</p>
@@ -328,7 +463,7 @@
 						{/if}
 					</summary>
 					<div class="collapse-content text-sm">
-						<div class="space-y-3">
+						<div class="space-y-3 pt-1">
 							{#if isAdminRole}
 								<div
 									class="alert alert-info bg-info/10 text-info-content border-info/20 text-xs py-2"
@@ -342,43 +477,138 @@
 							{:else}
 								<p class="text-xs opacity-75">Pilih satu atau lebih kelas yang bisa diakses</p>
 							{/if}
-							{#if visibleKelasCount > 0}
-								<button
-									type="button"
-									class="btn btn-xs btn-outline btn-error shadow-none"
-									onclick={clearKelas}
-								>
-									Kosongkan pilihan kelas
-								</button>
-							{/if}
+
 							{#if filteredKelasList.length > 0}
-								<div class="space-y-2">
-									<label class="bg-base-300 flex cursor-pointer gap-2 rounded p-2 font-semibold">
-										<input
-											type="checkbox"
-											class="checkbox checkbox-sm"
-											checked={allKelasSelected}
-											onchange={toggleSelectAllKelas}
+								<!-- Toolbar Pencarian & Aksi -->
+								<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+									<div class="relative flex-1">
+										<Icon
+											name="search"
+											class="text-base-content/50 pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
 										/>
-										<span class="text-sm">Pilih Semua</span>
-									</label>
-									{#each filteredKelasList as k (k.id)}
-										<label class="flex cursor-pointer gap-2">
-											<input
-												type="checkbox"
-												class="checkbox checkbox-sm"
-												checked={kelasIds.has(k.id)}
-												onchange={() => toggleKelas(k.id)}
-											/>
-											<span class="text-sm">
-												{k.nama}
-												{#if k.fase}({k.fase}){/if}
-												{#if waliKelasIdSet.has(k.id)}
-													<span class="badge badge-sm badge-primary ml-1">wali</span>
-												{/if}
-											</span>
-										</label>
-									{/each}
+										<input
+											type="text"
+											placeholder="Cari kelas atau fase..."
+											bind:value={searchKelas}
+											onkeydown={(e) => {
+												if (e.key === 'Enter') e.preventDefault();
+											}}
+											class="input input-sm bg-base-100 border-base-300 w-full rounded-lg pl-9 pr-8"
+										/>
+										{#if searchKelas}
+											<button
+												type="button"
+												class="btn btn-ghost btn-xs btn-circle absolute right-1.5 top-1/2 -translate-y-1/2"
+												onclick={() => (searchKelas = '')}
+												aria-label="Bersihkan pencarian"
+											>
+												<Icon name="close" class="h-3.5 w-3.5" />
+											</button>
+										{/if}
+									</div>
+									{#if visibleKelasCount > 0}
+										<button
+											type="button"
+											class="btn btn-xs btn-outline btn-error shadow-none shrink-0"
+											onclick={clearKelas}
+										>
+											Kosongkan pilihan ({visibleKelasCount})
+										</button>
+									{/if}
+								</div>
+
+								<!-- Tabel Kelas -->
+								<div
+									class="max-h-72 overflow-x-auto overflow-y-auto rounded-lg border border-base-300 bg-base-100"
+								>
+									<table class="table table-sm w-full">
+										<thead class="sticky top-0 z-10 bg-base-200">
+											<tr>
+												<th class="w-12 text-center">
+													<input
+														type="checkbox"
+														class="checkbox checkbox-xs"
+														checked={allSearchedKelasSelected}
+														indeterminate={someSearchedKelasSelected && !allSearchedKelasSelected}
+														onchange={toggleSelectAllSearchedKelas}
+														disabled={searchedKelasList.length === 0}
+														title="Pilih semua yang tampil"
+														aria-label="Pilih semua kelas yang tampil"
+													/>
+												</th>
+												<th>Kelas</th>
+												<th class="w-20 text-center">Fase</th>
+												<th class="w-32 text-center">Keterangan</th>
+											</tr>
+										</thead>
+										<tbody>
+											{#if searchedKelasList.length === 0}
+												<tr>
+													<td colspan="4" class="text-center py-6 text-base-content/60 text-xs">
+														Tidak ada data yang cocok dengan pencarian.
+													</td>
+												</tr>
+											{:else}
+												{#each searchedKelasList as k (k.id)}
+													{@const selected = kelasIds.has(k.id)}
+													{@const isWali = waliKelasIdSet.has(k.id)}
+													<tr
+														class="cursor-pointer transition-colors hover:bg-base-200/60 {selected
+															? 'bg-secondary/10'
+															: ''}"
+														onclick={() => toggleKelas(k.id)}
+													>
+														<td class="text-center">
+															<input
+																type="checkbox"
+																class="checkbox checkbox-xs checkbox-secondary"
+																checked={selected}
+																onclick={(e) => e.stopPropagation()}
+																onchange={() => toggleKelas(k.id)}
+																aria-label={`Pilih ${k.nama}`}
+															/>
+														</td>
+														<td class="font-medium text-sm">
+															{k.nama}
+														</td>
+														<td class="text-center text-xs">
+															{#if k.fase}
+																<span class="badge badge-xs badge-ghost font-mono">{k.fase}</span>
+															{:else}
+																<span class="opacity-40">-</span>
+															{/if}
+														</td>
+														<td class="text-center">
+															<div class="flex items-center justify-center gap-1 flex-wrap">
+																{#if isWali}
+																	<span class="badge badge-xs badge-primary font-medium">Wali</span>
+																{/if}
+																{#if selected}
+																	<span class="badge badge-xs badge-secondary font-medium"
+																		>Terpilih</span
+																	>
+																{/if}
+																{#if !isWali && !selected}
+																	<span class="text-xs opacity-40">-</span>
+																{/if}
+															</div>
+														</td>
+													</tr>
+												{/each}
+											{/if}
+										</tbody>
+									</table>
+								</div>
+
+								<div class="flex items-center justify-between text-xs text-base-content/60 px-1">
+									<span>
+										Menampilkan {searchedKelasList.length} dari {filteredKelasList.length} kelas
+									</span>
+									{#if visibleKelasCount > 0}
+										<span class="font-medium text-secondary">
+											{visibleKelasCount} dipilih
+										</span>
+									{/if}
 								</div>
 							{:else}
 								<p class="text-xs opacity-75">- tidak ada kelas -</p>

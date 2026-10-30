@@ -5,10 +5,11 @@
 	import Icon from '$lib/components/icon.svelte';
 	import { toast } from '$lib/components/toast.svelte';
 	import { modalRoute, searchQueryMarker } from '$lib/utils';
-	import { onDestroy } from 'svelte';
 	import MuridModals from '$lib/components/murid/modals.svelte';
 	import PindahMuridModal from '$lib/components/murid/pindah-murid-modal.svelte';
 	import { buildPageNumbers, OPSI_BARIS_PER_HALAMAN } from '$lib/utils/pagination';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 
 	type BulkModalData = {
 		type: 'bulk';
@@ -29,7 +30,6 @@
 	});
 	// svelte-ignore state_referenced_locally
 	let searchTerm = $state(data.page.search ?? '');
-	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 	const currentPage = $derived.by(() => data.page.currentPage ?? 1);
 	const totalPages = $derived.by(() => Math.max(1, data.page.totalPages ?? 1));
 	const nomorHalaman = $derived(buildPageNumbers(currentPage, totalPages));
@@ -44,7 +44,6 @@
 	);
 
 	$effect(() => {
-		if (searchTimer) return;
 		const latestSearchTerm = data.page.search ?? '';
 		if (searchTerm !== latestSearchTerm) {
 			searchTerm = latestSearchTerm;
@@ -82,19 +81,12 @@
 		formAlasanKustom = '';
 	}
 
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
+
 	async function setStatusFilter(statusKey: string) {
-		const params = new SvelteURLSearchParams(page.url.search);
-		if (statusKey === 'aktif') {
-			params.delete('status');
-		} else {
-			params.set('status', statusKey);
-		}
-		params.delete('page');
-		const nextQuery = params.toString();
-		await goto(`${page.url.pathname}${nextQuery ? `?${nextQuery}` : ''}`, {
-			replaceState: true,
-			keepFocus: true
-		});
+		await terapkanFilter('status', statusKey === 'aktif' ? '' : statusKey);
 	}
 
 	function handleSubmittingChange(value: boolean) {
@@ -160,35 +152,6 @@
 
 	import SvelteURLSearchParams from '$lib/svelte-helpers/url-search-params';
 
-	function buildSearchUrl(rawValue: string) {
-		const params = new SvelteURLSearchParams(page.url.search);
-		const cleaned = rawValue.trim();
-		const current = params.get('q') ?? '';
-		const searchChanged = cleaned !== current;
-		if (cleaned) {
-			params.set('q', cleaned);
-		} else {
-			params.delete('q');
-		}
-		if (searchChanged) {
-			params.delete('page');
-		}
-		const nextQuery = params.toString();
-		const nextUrl = `${page.url.pathname}${nextQuery ? `?${nextQuery}` : ''}`;
-		const currentUrl = `${page.url.pathname}${page.url.search}`;
-		if (nextUrl === currentUrl) {
-			return null;
-		}
-		return nextUrl;
-	}
-
-	async function applySearch(rawValue: string) {
-		const target = buildSearchUrl(rawValue);
-		if (!target) return;
-		searchTimer = undefined;
-		await goto(target, { replaceState: true, keepFocus: true });
-	}
-
 	function buildPageUrl(pageNumber: number) {
 		const params = new SvelteURLSearchParams(page.url.search);
 		const sanitized = pageNumber < 1 ? 1 : pageNumber;
@@ -242,32 +205,6 @@
 		if (pageNumber === currentPage) return;
 		void gotoPage(pageNumber);
 	}
-
-	function handleSearchInput(event: Event) {
-		const value = (event.currentTarget as HTMLInputElement).value;
-		searchTerm = value;
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = setTimeout(() => {
-			void applySearch(value);
-		}, 400);
-	}
-
-	function submitSearch(event: Event) {
-		event.preventDefault();
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-			searchTimer = undefined;
-		}
-		void applySearch(searchTerm);
-	}
-
-	onDestroy(() => {
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-	});
 
 	function submitBulkDelete(event: Event) {
 		event.preventDefault();
@@ -481,17 +418,33 @@
 		{/each}
 	</div>
 
-	<form
-		class="flex flex-col items-center gap-2 sm:flex-row"
-		data-sveltekit-keepfocus
-		data-sveltekit-replacestate
-		onsubmit={submitSearch}
-	>
-		<!-- Cari nama murid -->
-		<div class="join w-full">
+	<div class="mb-4 flex flex-col gap-2 sm:flex-row">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder="Cari nama murid..."
+			onSearch={(value) => terapkanFilter('q', value)}
+			pilih={[
+				{
+					name: 'status',
+					label: 'Status',
+					value: data.page.status === 'aktif' ? '' : (data.page.status ?? ''),
+					opsis: [
+						{ value: '', label: 'Semua Status' },
+						{ value: 'aktif', label: 'Aktif' },
+						{ value: 'lulus', label: 'Lulus' },
+						{ value: 'pindah', label: 'Pindah' },
+						{ value: 'keluar', label: 'Keluar' }
+					],
+					onChange: (v) => terapkanFilter('status', v)
+				}
+			]}
+			aktif={countActiveFilters(page.url, ['q', 'status'])}
+			onReset={() =>
+				goto(resetFilters(page.url, ['q', 'status']), { replaceState: true, keepFocus: true })}
+		>
 			{#if data.kelasTujuan && data.kelasTujuan.length > 0}
 				<select
-					class="select bg-base-200 dark:bg-base-300 join-item w-auto shrink font-medium dark:border-none"
+					class="select bg-base-200 dark:bg-base-300 w-auto shrink font-medium dark:border-none"
 					value={data.page.kelasId ?? ''}
 					title="Filter Kelas"
 					onchange={(event) => gotoKelasFilter((event.currentTarget as HTMLSelectElement).value)}
@@ -502,20 +455,8 @@
 					{/each}
 				</select>
 			{/if}
-			<label class="input bg-base-200 dark:bg-base-300 join-item grow dark:border-none">
-				<Icon name="search" />
-				<input
-					type="search"
-					name="q"
-					value={searchTerm}
-					spellcheck="false"
-					placeholder="Cari nama murid..."
-					autocomplete="name"
-					oninput={handleSearchInput}
-				/>
-			</label>
 			<select
-				class="select bg-base-200 dark:bg-base-300 join-item w-auto shrink dark:border-none"
+				class="select bg-base-200 dark:bg-base-300 w-auto shrink dark:border-none"
 				value={data.page.perPage}
 				title="Baris per halaman"
 				onchange={(event) =>
@@ -525,8 +466,8 @@
 					<option value={jumlah}>{jumlah} / hal</option>
 				{/each}
 			</select>
-		</div>
-	</form>
+		</FilterToolbar>
+	</div>
 
 	<FormEnhance
 		id="form-bulk-delete"

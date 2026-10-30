@@ -1,6 +1,11 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import FormEnhance from '$lib/components/form-enhance.svelte';
 	import Icon from '$lib/components/icon.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { countActiveFilters, resetFilters, setFilter } from '$lib/utils/url-filter';
 	import type { PageData } from './$types';
 
 	type TahunAjaranRow = typeof import('$lib/server/db/schema').tableTahunAjaran.$inferSelect;
@@ -20,6 +25,29 @@
 	let masterCheckbox: HTMLInputElement | undefined;
 	let createFormState = $state({ submitting: false, invalid: true });
 	let editFormState = $state({ submitting: false, invalid: true });
+
+	const KUNCI_FILTER = ['q'];
+
+	// svelte-ignore state_referenced_locally
+	let searchTerm = $state(data.q ?? '');
+
+	$effect(() => {
+		const latestQ = data.q ?? '';
+		if (searchTerm !== latestQ) {
+			searchTerm = latestQ;
+		}
+	});
+
+	$effect(() => {
+		const nextList = (data.tahunAjaran ?? []) as TahunAjaranItem[];
+		untrack(() => {
+			tahunAjaranState = nextList;
+		});
+	});
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
 
 	const syncCreateFormState = (submitting: boolean, invalid: boolean) => {
 		queueMicrotask(() => {
@@ -165,6 +193,17 @@
 		</div>
 	</div>
 
+	<div class="mt-4">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder="Cari tahun ajaran..."
+			onSearch={(value) => terapkanFilter('q', value)}
+			aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+			onReset={() =>
+				goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+		/>
+	</div>
+
 	<div
 		class="bg-base-100 dark:bg-base-200 mt-4 overflow-x-auto rounded-md shadow-md dark:shadow-none"
 	>
@@ -246,7 +285,9 @@
 					{#if !tahunAjaranState.length && editingId !== 'new'}
 						<tr>
 							<td colspan="5" class="text-base-content/70 py-8 text-center">
-								Belum ada tahun ajaran yang tercatat untuk sekolah ini.
+								{data.kosongKarenaFilter
+									? 'Tidak ada tahun ajaran yang cocok dengan filter.'
+									: 'Belum ada tahun ajaran yang tercatat untuk sekolah ini.'}
 							</td>
 						</tr>
 					{:else}

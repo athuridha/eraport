@@ -56,6 +56,10 @@ vite.config.ts.timestamp-*
 /data/logs
 /data/arsip
 
+# Cadangan basis data lokal + salinan DB lama di root (layout sebelum data/)
+/backup/
+/database.sqlite3*
+
 # ai local config
 opencode.json
 openclaw.json

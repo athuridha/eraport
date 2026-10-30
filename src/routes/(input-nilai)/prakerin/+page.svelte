@@ -1,7 +1,10 @@
 <script lang="ts">
-	import { invalidate } from '$app/navigation';
+	import { goto, invalidate } from '$app/navigation';
+	import { page } from '$app/state';
 	import FormEnhance from '$lib/components/form-enhance.svelte';
 	import Icon from '$lib/components/icon.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { countActiveFilters, resetFilters, setFilter } from '$lib/utils/url-filter';
 
 	type Perusahaan = {
 		id: number;
@@ -49,6 +52,8 @@
 		authorized: boolean;
 		kelasId: number | null;
 		semuaKelasMode: boolean;
+		q?: string;
+		kosongKarenaFilter?: boolean;
 		perusahaan: Perusahaan[];
 		kelompok: Kelompok[];
 		tujuan: Tujuan[];
@@ -58,6 +63,22 @@
 	}
 
 	let { data }: { data: PageData } = $props();
+
+	const KUNCI_FILTER = ['q'];
+
+	// svelte-ignore state_referenced_locally
+	let searchTerm = $state(data.q ?? '');
+
+	$effect(() => {
+		const latestQ = data.q ?? '';
+		if (searchTerm !== latestQ) {
+			searchTerm = latestQ;
+		}
+	});
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
 
 	const canManage = $derived(data.authorized);
 
@@ -268,22 +289,38 @@
 			<Icon name="briefcase" class="text-primary" />
 			<h2 class="text-xl font-bold">Perusahaan Mitra</h2>
 		</div>
-		<button
-			type="button"
-			class="btn btn-soft btn-sm shadow-none"
-			disabled={!canManage}
-			onclick={() => (perusahaanModalOpen = true)}
-			title={!canManage ? 'Anda tidak memiliki izin untuk menambah' : ''}
+	</div>
+
+	<div class="mb-4">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder="Cari perusahaan/prakerin..."
+			onSearch={(value) => terapkanFilter('q', value)}
+			aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+			onReset={() =>
+				goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
 		>
-			<Icon name="plus" />
-			Tambah Perusahaan
-		</button>
+			<button
+				type="button"
+				class="btn btn-soft btn-sm shadow-none"
+				disabled={!canManage}
+				onclick={() => (perusahaanModalOpen = true)}
+				title={!canManage ? 'Anda tidak memiliki izin untuk menambah' : ''}
+			>
+				<Icon name="plus" />
+				Tambah Perusahaan
+			</button>
+		</FilterToolbar>
 	</div>
 
 	{#if data.perusahaan.length === 0}
 		<div class="alert alert-soft alert-info">
 			<Icon name="info" />
-			<span>Belum ada data perusahaan mitra.</span>
+			<span
+				>{data.kosongKarenaFilter
+					? 'Tidak ada yang cocok dengan filter.'
+					: 'Belum ada data perusahaan mitra.'}</span
+			>
 		</div>
 	{:else}
 		<div class="bg-base-100 dark:bg-base-200 overflow-x-auto rounded-md shadow-md dark:shadow-none">

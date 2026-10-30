@@ -11,7 +11,7 @@ import {
 import { agamaMapelNames, agamaMapelOptions, pksMapelNames, pksMapelOptions } from '$lib/statics';
 import { unflattenFormData } from '$lib/utils';
 import { fail } from '@sveltejs/kit';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, like, or } from 'drizzle-orm';
 import { readBufferToAoA } from '$lib/utils/excel.js';
 import { redirect } from '@sveltejs/kit';
 import { authority } from '../../../../pengguna/utils.server';
@@ -34,8 +34,9 @@ function isXlsxMime(type: string | null | undefined) {
 	return type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 }
 
-export async function load({ depends, params, parent, locals }) {
+export async function load({ depends, params, parent, locals, url }) {
 	const sekolahId = locals.sekolah?.id;
+	const q = (url.searchParams.get('q') ?? '').trim();
 	// Check permission: admin, kepala_sekolah, user, wali_kelas, wali_asuh can access
 	// Also allow 'user' type (guru mapel) since they're filtered server-side
 	const { user } = await parent();
@@ -63,8 +64,6 @@ export async function load({ depends, params, parent, locals }) {
 	if (mapel.nama === 'Pendalaman Kitab Suci' || /^pendalaman kitab suci/i.test(mapel.nama)) {
 		await ensurePksMapelForClasses([mapel.kelasId]);
 	}
-
-	let tujuanPembelajaran: (typeof tableTujuanPembelajaran.$inferSelect)[];
 
 	let agamaOptions: Array<{
 		id: number;
@@ -256,6 +255,7 @@ export async function load({ depends, params, parent, locals }) {
 	// return the tujuan pembelajaran for that assigned variant so the
 	// page shows the correct TP even without client navigation.
 	// Supports both legacy (mataPelajaranId) and multi-mapel (join table) users.
+	let targetMapelId = +params.id;
 	let agamaSelection = agamaOptions.find((item) => item.isActive)?.id?.toString() ?? '';
 	if (
 		agamaOptions.length > 0 &&
@@ -266,54 +266,37 @@ export async function load({ depends, params, parent, locals }) {
 	) {
 		const assignedLocal = agamaOptions.find((opt) => opt.id === assignedLocalMapelId);
 		if (assignedLocal) {
-			// load tujuan for the assigned variant instead of the parent mapel
+			targetMapelId = assignedLocal.id;
 			agamaSelection = String(assignedLocal.id);
-			tujuanPembelajaran = await db.query.tableTujuanPembelajaran.findMany({
-				where: eq(tableTujuanPembelajaran.mataPelajaranId, assignedLocal.id),
-				with: {
-					teknikPenilaian: {
-						columns: { id: true, nama: true, singkatan: true }
-					}
-				},
-				orderBy: asc(tableTujuanPembelajaran.createdAt)
-			});
-			// mark active
 			agamaOptions = agamaOptions.map((opt) => ({
 				...opt,
 				isActive: opt.id === assignedLocal.id
 			}));
-			return {
-				tujuanPembelajaran,
-				agamaOptions,
-				agamaSelection,
-				assignedLocalMapelId,
-				// server-enforced disabled flag: only disable for single-assignment (legacy) users
-				// For multi-mapel users, client-side logic handles locking based on parent page check
-				agamaSelectDisabled: Boolean(
-					user?.type === 'user' &&
-					user?.mataPelajaranId && // Only if user has legacy single mataPelajaranId
-					assignedGlobalId &&
-					((): boolean => {
-						const name = assignedGlobalName as (typeof agamaMapelNames)[number] | undefined;
-						return Boolean(name && agamaMapelNames.includes(name));
-					})()
-				),
-				lockedAgamaSelectionId: assignedLocalMapelId ?? assignedGlobalId,
-				meta: { title: `Tujuan Pembelajaran - ${assignedLocal.name}` }
-			};
 		}
 	}
 
-	// default behaviour: load tujuan for the requested mapel id
-	tujuanPembelajaran = await db.query.tableTujuanPembelajaran.findMany({
-		where: eq(tableTujuanPembelajaran.mataPelajaranId, +params.id),
-		with: {
-			teknikPenilaian: {
-				columns: { id: true, nama: true, singkatan: true }
-			}
-		},
-		orderBy: asc(tableTujuanPembelajaran.createdAt)
-	});
+	const baseCondition = eq(tableTujuanPembelajaran.mataPelajaranId, targetMapelId);
+	const searchCondition = q
+		? or(
+				like(tableTujuanPembelajaran.deskripsi, `%${q}%`),
+				like(tableTujuanPembelajaran.lingkupMateri, `%${q}%`)
+			)
+		: undefined;
+	const rowCondition = searchCondition ? and(baseCondition, searchCondition) : baseCondition;
+
+	const [[{ totalSemua }], [{ totalFiltered }], tujuanPembelajaran] = await Promise.all([
+		db.select({ totalSemua: count() }).from(tableTujuanPembelajaran).where(baseCondition),
+		db.select({ totalFiltered: count() }).from(tableTujuanPembelajaran).where(rowCondition),
+		db.query.tableTujuanPembelajaran.findMany({
+			where: rowCondition,
+			with: {
+				teknikPenilaian: {
+					columns: { id: true, nama: true, singkatan: true }
+				}
+			},
+			orderBy: asc(tableTujuanPembelajaran.createdAt)
+		})
+	]);
 
 	const teknikPenilaianList = sekolahId
 		? await db.query.tableTeknikPenilaian.findMany({
@@ -332,18 +315,27 @@ export async function load({ depends, params, parent, locals }) {
 		})()
 	);
 
+	const assignedLocal =
+		targetMapelId !== +params.id ? agamaOptions.find((opt) => opt.id === targetMapelId) : undefined;
+
 	return {
 		tujuanPembelajaran,
 		teknikPenilaianList,
 		agamaOptions,
 		agamaSelection,
 		assignedLocalMapelId,
+		q,
+		totalSemua,
+		totalFiltered,
+		kosongKarenaFilter: totalSemua > 0 && totalFiltered === 0 && Boolean(q),
 		// server-enforced disabled flag: only disable for single-assignment (legacy) users
 		// For multi-mapel users, client-side logic handles locking based on parent page check
 		agamaSelectDisabled: agamaSelectDisabledValue,
 		lockedAgamaSelectionId: assignedLocalMapelId ?? assignedGlobalId,
 		userHasMultiAgama,
-		meta: { title: `Tujuan Pembelajaran - ${mapel.nama}` }
+		meta: {
+			title: `Tujuan Pembelajaran - ${assignedLocal?.name ?? mapel.nama}`
+		}
 	};
 }
 

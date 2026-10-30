@@ -142,6 +142,8 @@ export const actions: Actions = {
 							.values({
 								nama,
 								nip: pegawaiNip,
+								// ikutkan sekolah aktif supaya pegawai muncul di dropdown relasi
+								sekolahId: locals.sekolah?.id ?? null,
 								createdAt: timestamp,
 								updatedAt: timestamp
 							})

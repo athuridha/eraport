@@ -2,23 +2,53 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import Icon from '$lib/components/icon.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { countActiveFilters, resetFilters, setFilter } from '$lib/utils/url-filter';
 
 	let { data } = $props();
 
+	const KUNCI_FILTER = ['q', 'aksi', 'dari', 'sampai'];
+
+	// svelte-ignore state_referenced_locally
+	let searchTerm = $state(data.filter?.q ?? '');
+
+	$effect(() => {
+		const latest = data.filter?.q ?? '';
+		if (searchTerm !== latest) {
+			searchTerm = latest;
+		}
+	});
+
 	const daftar = $derived(data.daftar ?? []);
-	const aksi = $derived(data.filter?.aksi ?? null);
+	const aksi = $derived(data.filter?.aksi ?? '');
+	const dari = $derived(data.filter?.dari ?? '');
+	const sampai = $derived(data.filter?.sampai ?? '');
+	const opsiAksi = $derived(data.opsiAksi ?? []);
+	const kosongKarenaFilter = $derived(Boolean(data.kosongKarenaFilter));
 
 	const labelAksi: Record<string, string> = {
 		import_nilai: 'Impor Nilai',
 		update_nilai: 'Ubah Nilai'
 	};
 
-	async function setFilter(nilai: string) {
-		const params = new URLSearchParams(page.url.search);
-		if (nilai) params.set('aksi', nilai);
-		else params.delete('aksi');
-		const query = params.toString();
-		await goto(`${page.url.pathname}${query ? `?${query}` : ''}`, { keepFocus: true });
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
+
+	async function terapkanTanggal(nilaiDari: string, nilaiSampai: string) {
+		const next = new URL(page.url);
+		if (nilaiDari) {
+			next.searchParams.set('dari', nilaiDari);
+		} else {
+			next.searchParams.delete('dari');
+		}
+		if (nilaiSampai) {
+			next.searchParams.set('sampai', nilaiSampai);
+		} else {
+			next.searchParams.delete('sampai');
+		}
+		next.searchParams.delete('page');
+		await goto(next, { replaceState: true, keepFocus: true });
 	}
 
 	function formatWaktu(iso: unknown) {
@@ -50,23 +80,37 @@
 				Riwayat perubahan nilai (impor Excel maupun ubah manual) beserta pelaku dan waktunya.
 			</p>
 		</div>
-		<div class="flex items-center gap-2 max-sm:w-full max-sm:flex-col">
-			<select
-				class="select bg-base-200 dark:bg-base-300 w-full max-w-xs dark:border-none"
-				value={aksi ?? ''}
-				title="Filter jenis audit"
-				onchange={(event) => setFilter((event.currentTarget as HTMLSelectElement).value)}
-			>
-				<option value="">Semua jenis</option>
-				{#each Object.entries(labelAksi) as [value, label] (value)}
-					<option {value}>{label}</option>
-				{/each}
-			</select>
+		<div class="flex items-center gap-2 max-sm:w-full">
 			<a class="btn btn-soft shadow-none max-sm:w-full" href="/nilai-akhir/impor-nilai">
 				<Icon name="import" />
 				Impor Nilai
 			</a>
 		</div>
+	</div>
+
+	<div class="mb-4">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder="Cari aktor/aksi..."
+			onSearch={(value) => terapkanFilter('q', value)}
+			pilih={[
+				{
+					name: 'aksi',
+					label: 'Aksi',
+					value: aksi,
+					opsis: [{ value: '', label: 'Semua Aksi' }, ...opsiAksi],
+					onChange: (v) => terapkanFilter('aksi', v)
+				}
+			]}
+			tanggal={{
+				dari,
+				sampai,
+				onChange: (v) => terapkanTanggal(v.dari, v.sampai)
+			}}
+			aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+			onReset={() =>
+				goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+		/>
 	</div>
 
 	<div class="bg-base-100 dark:bg-base-200 overflow-x-auto rounded-md shadow-md dark:shadow-none">
@@ -96,7 +140,11 @@
 				{:else}
 					<tr>
 						<td class="p-6 text-center" colspan="5">
-							<em class="opacity-60">Belum ada jejak audit.</em>
+							<em class="opacity-60">
+								{kosongKarenaFilter
+									? 'Tidak ada jejak audit yang cocok dengan filter.'
+									: 'Belum ada jejak audit.'}
+							</em>
 						</td>
 					</tr>
 				{/each}

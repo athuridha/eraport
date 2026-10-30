@@ -3,9 +3,10 @@
 	import { page } from '$app/state';
 	import Icon from '$lib/components/icon.svelte';
 	import DeskripsiCell from '$lib/components/nilai-ekstrakurikuler/deskripsi-cell.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 	import { searchQueryMarker } from '$lib/utils';
 	import type { EkstrakurikulerNilaiKategori } from '$lib/ekstrakurikuler';
-	import { onDestroy } from 'svelte';
 	import { toast } from '$lib/components/toast.svelte';
 	import { showModal } from '$lib/components/global-modal.svelte';
 	import ActionButtons from '$lib/components/nilai-ekstrakurikuler/action-buttons.svelte';
@@ -76,7 +77,6 @@
 	);
 	// svelte-ignore state_referenced_locally
 	let searchTerm = $state(data.search ?? '');
-	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 	let isDownloadingTemplate = $state(false);
 	let isImportingFile = $state(false);
 	const kelasAktif = $derived(page.data.kelasAktif ?? null);
@@ -89,6 +89,12 @@
 		const u = page.data.user as { type?: string } | null | undefined;
 		return u?.type !== 'wali_asuh';
 	});
+
+	const KUNCI_FILTER = ['q', 'ekstrakurikuler_id'];
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
 
 	$effect(() => {
 		selectedEkstrakValue = data.selectedEkstrakurikulerId
@@ -103,83 +109,21 @@
 		const onlyId = String(data.ekstrakurikulerList[0].id);
 		if (selectedEkstrakValue === onlyId) return;
 		selectedEkstrakValue = onlyId;
-		handleEkstrakChange(onlyId);
-	});
-
-	import SvelteURLSearchParams from '$lib/svelte-helpers/url-search-params';
-
-	function buildUrl(updateParams: (params: SvelteURLSearchParams) => void) {
-		const params = new SvelteURLSearchParams(page.url.search);
-		updateParams(params);
-		const nextQuery = params.toString();
-		const nextUrl = `${page.url.pathname}${nextQuery ? `?${nextQuery}` : ''}`;
-		const currentUrl = `${page.url.pathname}${page.url.search}`;
-		return nextUrl === currentUrl ? null : nextUrl;
-	}
-
-	async function applyNavigation(updateParams: (params: SvelteURLSearchParams) => void) {
-		const target = buildUrl(updateParams);
-		if (!target) return;
-		await goto(target, { replaceState: true, keepFocus: true });
-	}
-
-	function handleEkstrakChange(value: string) {
-		void applyNavigation((params) => {
-			if (value) {
-				params.set('ekstrakurikuler_id', value);
-			} else {
-				params.delete('ekstrakurikuler_id');
-			}
-			params.delete('page');
-		});
-	}
-
-	async function applySearch(value: string) {
-		await applyNavigation((params) => {
-			const cleaned = value.trim();
-			if (cleaned) {
-				params.set('q', cleaned);
-			} else {
-				params.delete('q');
-			}
-			params.delete('page');
-		});
-	}
-
-	function handleSearchInput(event: Event) {
-		const value = (event.currentTarget as HTMLInputElement).value;
-		searchTerm = value;
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = setTimeout(() => {
-			void applySearch(value);
-		}, 400);
-	}
-
-	function submitSearch(event: Event) {
-		event.preventDefault();
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-			searchTimer = undefined;
-		}
-		void applySearch(searchTerm);
-	}
-
-	onDestroy(() => {
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
+		void terapkanFilter('ekstrakurikuler_id', onlyId);
 	});
 
 	function gotoPage(pageNumber: number) {
 		const sanitized = pageNumber < 1 ? 1 : pageNumber;
-		void applyNavigation((params) => {
-			if (sanitized <= 1) {
-				params.delete('page');
-			} else {
-				params.set('page', String(sanitized));
-			}
+		const params = new URLSearchParams(page.url.search);
+		if (sanitized <= 1) {
+			params.delete('page');
+		} else {
+			params.set('page', String(sanitized));
+		}
+		const query = params.toString();
+		void goto(`${page.url.pathname}${query ? `?${query}` : ''}`, {
+			replaceState: true,
+			keepFocus: true
 		});
 	}
 
@@ -311,47 +255,30 @@
 		onImport={handleFileImport}
 	/>
 
-	<div class="flex flex-col items-center gap-2 sm:flex-row">
-		<label class="w-full md:max-w-80">
-			<span class="sr-only">Pilih ekstrakurikuler</span>
-			<select
-				class="select bg-base-200 w-full truncate dark:border-none"
-				title={!canEdit ? 'Anda tidak memiliki izin untuk mengubah' : 'Pilih ekstrakurikuler'}
-				bind:value={selectedEkstrakValue}
-				onchange={(event) => handleEkstrakChange((event.currentTarget as HTMLSelectElement).value)}
-				disabled={!hasEkstrakurikuler || !canEdit}
-			>
-				{#if !hasEkstrakurikuler}
-					<option value="">Belum ada ekstrakurikuler</option>
-				{:else}
-					<option value="" disabled selected={selectedEkstrakValue === ''}>
-						Pilih Ekstrakurikuler
-					</option>
-					{#each data.ekstrakurikulerList as item (item.id)}
-						<option value={String(item.id)}>{capitalizeSentence(item.nama)}</option>
-					{/each}
-				{/if}
-			</select>
-		</label>
-		<form
-			class="w-full"
-			autocomplete="off"
-			data-sveltekit-keepfocus
-			data-sveltekit-replacestate
-			onsubmit={submitSearch}
-		>
-			<label class="input bg-base-200 dark:bg-base-300 w-full dark:border-none">
-				<Icon name="search" />
-				<input
-					type="search"
-					name="q"
-					value={searchTerm}
-					autocomplete="off"
-					placeholder="Cari nama murid..."
-					oninput={handleSearchInput}
-				/>
-			</label>
-		</form>
+	<div class="mb-4 flex flex-col gap-2 sm:flex-row">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder="Cari nama murid..."
+			onSearch={(value) => terapkanFilter('q', value)}
+			pilih={[
+				{
+					name: 'ekstrakurikuler_id',
+					label: 'Ekstrakurikuler',
+					value: data.selectedEkstrakurikulerId ? String(data.selectedEkstrakurikulerId) : '',
+					opsis: [
+						{ value: '', label: 'Semua Ekstrakurikuler' },
+						...data.ekstrakurikulerList.map((item) => ({
+							value: String(item.id),
+							label: capitalizeSentence(item.nama)
+						}))
+					],
+					onChange: (v) => terapkanFilter('ekstrakurikuler_id', v)
+				}
+			]}
+			aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+			onReset={() =>
+				goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+		/>
 	</div>
 
 	{#if !hasEkstrakurikuler}

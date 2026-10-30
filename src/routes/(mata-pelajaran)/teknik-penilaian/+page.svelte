@@ -1,7 +1,11 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import FormEnhance from '$lib/components/form-enhance.svelte';
 	import Icon from '$lib/components/icon.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
 	import { toast } from '$lib/components/toast.svelte';
+	import { countActiveFilters, resetFilters, setFilter } from '$lib/utils/url-filter';
 
 	let { data } = $props();
 
@@ -13,6 +17,22 @@
 		urutan: number | null;
 		totalTp: number;
 	};
+
+	const KUNCI_FILTER = ['q'];
+
+	// svelte-ignore state_referenced_locally
+	let searchTerm = $state(data.q ?? '');
+
+	$effect(() => {
+		const latestQ = data.q ?? '';
+		if (searchTerm !== latestQ) {
+			searchTerm = latestQ;
+		}
+	});
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
 
 	let modalOpen = $state(false);
 	let editMode = $state(false);
@@ -91,6 +111,16 @@
 
 	<!-- Tabel Teknik Penilaian -->
 	<div class="card bg-base-100 p-4 shadow-md dark:border-none">
+		<div class="mb-4">
+			<FilterToolbar
+				bind:q={searchTerm}
+				qPlaceholder="Cari teknik penilaian..."
+				onSearch={(value) => terapkanFilter('q', value)}
+				aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+				onReset={() =>
+					goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+			/>
+		</div>
 		<div class="overflow-x-auto">
 			<table class="border-base-200 table border dark:border-none">
 				<thead>
@@ -148,7 +178,9 @@
 					{:else}
 						<tr>
 							<td class="p-6 text-center opacity-60" colspan="6">
-								Belum ada teknik penilaian. Klik "Reset Standar" untuk memuat teknik bawaan.
+								{data.kosongKarenaFilter
+									? 'Tidak ada teknik penilaian yang cocok dengan filter.'
+									: 'Belum ada teknik penilaian. Klik "Reset Standar" untuk memuat teknik bawaan.'}
 							</td>
 						</tr>
 					{/each}

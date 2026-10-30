@@ -557,28 +557,37 @@ export async function simpanMasterData(
 
 			if (!allSchoolKelasIds.length) return { fail: 'Belum ada kelas terdaftar di sekolah ini.' };
 
-			const semuaKelas =
-				formData.get('semua_kelas') === '1' ||
-				formData.get('semua_kelas') === 'on' ||
-				teks(formData, 'kelas_id') === 'semua' ||
-				teks(formData, 'kelas_id') === '';
+			// Modal multi-kelas mengirim `kelas_ids` berulang dan tidak lagi me-render
+			// input `kelas_id`. Karena itu "semua kelas" tidak boleh ditebak dari
+			// `kelas_id` kosong — kalau begitu pilihan sebagian selalu melebar ke
+			// seluruh kelas sekolah dan pembersihan mapel yatap tidak pernah jalan.
+			const rawSelectedIds = [
+				...new Set(
+					formData
+						.getAll('kelas_ids')
+						.map((kId) => Number(kId))
+						.filter((kId) => Number.isInteger(kId) && allSchoolKelasIds.includes(kId))
+				)
+			];
+			const semuaKelasToggle =
+				formData.get('semua_kelas') === '1' || formData.get('semua_kelas') === 'on';
+			const kelasIdLegacy = teks(formData, 'kelas_id');
+			const kelasIdTunggal = Number(kelasIdLegacy) || 0;
 
-			const rawSelectedIds = formData.getAll('kelas_ids');
 			let targetKelasIds: number[] = [];
-
-			if (semuaKelas) {
+			if (rawSelectedIds.length > 0) {
+				targetKelasIds = rawSelectedIds;
+			} else if (semuaKelasToggle || kelasIdLegacy === 'semua') {
 				targetKelasIds = allSchoolKelasIds;
-			} else if (rawSelectedIds.length > 0) {
-				targetKelasIds = rawSelectedIds
-					.map((kId) => Number(kId))
-					.filter((kId) => Number.isInteger(kId) && allSchoolKelasIds.includes(kId));
-			} else if (Number(teks(formData, 'kelas_id'))) {
-				targetKelasIds = [Number(teks(formData, 'kelas_id'))];
+			} else if (kelasIdTunggal) {
+				targetKelasIds = [kelasIdTunggal];
 			}
 
 			if (!targetKelasIds.length) {
 				return { fail: 'Pilih minimal satu kelas tujuan untuk mata pelajaran ini.' };
 			}
+
+			const semuaKelas = targetKelasIds.length === allSchoolKelasIds.length;
 
 			for (const kId of targetKelasIds) {
 				const existing = await db.query.tableMataPelajaran.findFirst({
@@ -976,6 +985,174 @@ export async function simpanMasterDataMassal(
 
 	return {
 		message: `${dibuat} mata pelajaran ditambahkan${dilewati ? `, ${dilewati} kelas sudah punya mapel ini` : ''}.`
+	};
+}
+
+/**
+ * Ubah kelas massal untuk beberapa mata pelajaran sekaligus.
+ * Bisa menambah kelas tujuan atau mengganti seluruh set kelas.
+ */
+export async function ubahKelasMasterMassal(
+	sekolahId: number,
+	formData: FormData
+): Promise<HasilSimpan> {
+	const mentahIds = String(formData.get('ids') ?? '[]');
+	let ids: number[] = [];
+	try {
+		const parsed = JSON.parse(mentahIds);
+		if (Array.isArray(parsed)) {
+			ids = [
+				...new Set(
+					parsed.map((val) => Number(val)).filter((val) => Number.isInteger(val) && val > 0)
+				)
+			];
+		}
+	} catch {
+		return { fail: 'Data pilihan tidak valid.' };
+	}
+
+	if (!ids.length) {
+		return { fail: 'Tidak ada data yang dipilih.' };
+	}
+
+	const mode = formData.get('mode');
+	if (mode !== 'tambah' && mode !== 'ganti') {
+		return { fail: 'Mode ubah kelas tidak valid.' };
+	}
+
+	const rawKelasIds = [
+		...new Set(
+			formData
+				.getAll('kelas_ids')
+				.map((val) => Number(val))
+				.filter((val) => Number.isInteger(val) && val > 0)
+		)
+	];
+
+	if (!rawKelasIds.length) {
+		return { fail: 'Pilih minimal satu kelas tujuan.' };
+	}
+
+	const validKelasIds = (
+		await db
+			.select({ id: tableKelas.id })
+			.from(tableKelas)
+			.where(and(eq(tableKelas.sekolahId, sekolahId), inArray(tableKelas.id, rawKelasIds)))
+	).map((row) => row.id);
+
+	if (!validKelasIds.length) {
+		return { fail: 'Pilih minimal satu kelas tujuan.' };
+	}
+
+	// Resolve selected IDs to distinct names belonging to this school
+	const resolvedMapel = await db
+		.select({
+			id: tableMataPelajaran.id,
+			nama: tableMataPelajaran.nama
+		})
+		.from(tableMataPelajaran)
+		.innerJoin(tableKelas, eq(tableMataPelajaran.kelasId, tableKelas.id))
+		.where(and(eq(tableKelas.sekolahId, sekolahId), inArray(tableMataPelajaran.id, ids)));
+
+	const distinctNama = [...new Set(resolvedMapel.map((m) => m.nama))];
+	if (!distinctNama.length) {
+		return { fail: 'Tidak ada data yang dipilih.' };
+	}
+
+	const now = new Date().toISOString();
+	let totalDitambahkan = 0;
+	let totalDikeluarkan = 0;
+	let totalDiperbarui = 0;
+
+	for (const nama of distinctNama) {
+		// Existing rows for this mapel name across this school
+		const existingRows = await db
+			.select({
+				id: tableMataPelajaran.id,
+				kelasId: tableMataPelajaran.kelasId,
+				jenis: tableMataPelajaran.jenis,
+				kode: tableMataPelajaran.kode,
+				kkm: tableMataPelajaran.kkm,
+				urutan: tableMataPelajaran.urutan,
+				pengampuId: tableMataPelajaran.pengampuId
+			})
+			.from(tableMataPelajaran)
+			.innerJoin(tableKelas, eq(tableMataPelajaran.kelasId, tableKelas.id))
+			.where(and(eq(tableKelas.sekolahId, sekolahId), eq(tableMataPelajaran.nama, nama)));
+
+		if (!existingRows.length) continue;
+
+		const templateRow = existingRows[0];
+		const currentKelasIds = new Set(existingRows.map((r) => r.kelasId));
+		let perMapelInserted = 0;
+		let perMapelDeleted = 0;
+
+		if (mode === 'tambah') {
+			for (const targetKelasId of validKelasIds) {
+				if (!currentKelasIds.has(targetKelasId)) {
+					await db.insert(tableMataPelajaran).values({
+						kelasId: targetKelasId,
+						nama,
+						jenis: templateRow.jenis,
+						kode: templateRow.kode,
+						kkm: templateRow.kkm,
+						urutan: templateRow.urutan,
+						pengampuId: templateRow.pengampuId,
+						createdAt: now,
+						updatedAt: now
+					});
+					perMapelInserted += 1;
+				}
+			}
+		} else {
+			// mode === 'ganti'
+			const chosenSet = new Set(validKelasIds);
+
+			// Insert missing
+			for (const targetKelasId of validKelasIds) {
+				if (!currentKelasIds.has(targetKelasId)) {
+					await db.insert(tableMataPelajaran).values({
+						kelasId: targetKelasId,
+						nama,
+						jenis: templateRow.jenis,
+						kode: templateRow.kode,
+						kkm: templateRow.kkm,
+						urutan: templateRow.urutan,
+						pengampuId: templateRow.pengampuId,
+						createdAt: now,
+						updatedAt: now
+					});
+					perMapelInserted += 1;
+				}
+			}
+
+			// Delete rows in kelas not chosen, guarded by asesmen_sumatif count
+			const orphanRows = existingRows.filter((r) => !chosenSet.has(r.kelasId));
+			for (const orphan of orphanRows) {
+				const [{ nScores } = { nScores: 0 }] = await db
+					.select({ nScores: count() })
+					.from(tableAsesmenSumatif)
+					.where(eq(tableAsesmenSumatif.mataPelajaranId, orphan.id));
+
+				if (nScores === 0) {
+					await db.delete(tableMataPelajaran).where(eq(tableMataPelajaran.id, orphan.id));
+					perMapelDeleted += 1;
+				}
+			}
+		}
+
+		totalDitambahkan += perMapelInserted;
+		totalDikeluarkan += perMapelDeleted;
+		totalDiperbarui += 1;
+	}
+
+	const detail: string[] = [];
+	if (totalDitambahkan > 0) detail.push(`+${totalDitambahkan} kelas ditambahkan`);
+	if (totalDikeluarkan > 0) detail.push(`${totalDikeluarkan} dikeluarkan`);
+	const detailStr = detail.length > 0 ? ` (${detail.join(', ')})` : '';
+
+	return {
+		message: `${totalDiperbarui} mata pelajaran diperbarui${detailStr}.`
 	};
 }
 

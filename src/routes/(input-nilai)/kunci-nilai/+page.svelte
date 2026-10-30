@@ -1,8 +1,11 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
+	import { page } from '$app/state';
 	import FormEnhance from '$lib/components/form-enhance.svelte';
 	import Icon from '$lib/components/icon.svelte';
 	import { toast } from '$lib/components/toast.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 
 	type Mapel = {
 		id: number;
@@ -16,21 +19,28 @@
 
 	let { data } = $props();
 
-	let cari = $state('');
+	const KUNCI_FILTER = ['q', 'status'];
+
+	let searchTerm = $state(page.url.searchParams.get('q') ?? '');
+
+	// Sinkronkan kotak pencarian saat URL berubah (navigasi back/forward, reset).
+	$effect(() => {
+		const latest = page.url.searchParams.get('q') ?? '';
+		if (searchTerm !== latest) searchTerm = latest;
+	});
+
 	let targetKunci = $state<Mapel | null>(null);
 	let targetKunciId = $state(0);
 	let alasan = $state('');
 
 	const mapel = $derived((data.mapel ?? []) as Mapel[]);
-	const daftarTersaring = $derived.by(() => {
-		const keyword = cari.trim().toLowerCase();
-		if (!keyword) return mapel;
-		return mapel.filter(
-			(row) =>
-				row.nama.toLowerCase().includes(keyword) || row.pengampu.toLowerCase().includes(keyword)
-		);
-	});
-	const jumlahTerkunci = $derived(mapel.filter((row) => row.terkunci).length);
+	const jumlahTerkunci = $derived(
+		data.jumlahTerkunci ?? mapel.filter((row) => row.terkunci).length
+	);
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
 
 	function formatWaktu(value: string | null): string {
 		if (!value) return '—';
@@ -105,20 +115,26 @@
 			<span>Pilih kelas aktif di navbar dulu untuk mengelola kunci nilai.</span>
 		</div>
 	{:else}
-		<div class="mb-4 flex flex-col gap-2 sm:flex-row">
-			<label class="input bg-base-200 dark:bg-base-300 w-full sm:max-w-sm dark:border-none">
-				<Icon name="search" />
-				<input
-					type="search"
-					name="q"
-					bind:value={cari}
-					spellcheck="false"
-					placeholder="Cari mata pelajaran atau pengampu..."
-					autocomplete="off"
-				/>
-			</label>
-			<p class="text-base-content/70 self-center text-sm">
-				{jumlahTerkunci} dari {mapel.length} mata pelajaran terkunci
+		<div class="mb-4 flex flex-col gap-3">
+			<FilterToolbar
+				bind:q={searchTerm}
+				qPlaceholder="Cari mata pelajaran atau pengampu..."
+				onSearch={(value) => terapkanFilter('q', value)}
+				pilih={[
+					{
+						name: 'status',
+						label: 'Status',
+						value: page.url.searchParams.get('status') ?? '',
+						opsis: [{ value: '', label: 'Semua Status' }, ...(data.opsiStatus ?? [])],
+						onChange: (v) => terapkanFilter('status', v)
+					}
+				]}
+				aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+				onReset={() =>
+					goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+			/>
+			<p class="text-base-content/70 text-sm">
+				{jumlahTerkunci} dari {data.totalSemua ?? mapel.length} mata pelajaran terkunci
 			</p>
 		</div>
 
@@ -134,7 +150,7 @@
 					</tr>
 				</thead>
 				<tbody>
-					{#each daftarTersaring as row (row.id)}
+					{#each mapel as row (row.id)}
 						<tr>
 							<td class="font-medium">{row.nama}</td>
 							<td>{row.pengampu}</td>
@@ -192,7 +208,11 @@
 					{:else}
 						<tr>
 							<td class="p-6 text-center" colspan="5">
-								<em class="opacity-60">Belum ada mata pelajaran di kelas ini.</em>
+								{#if (data.totalSemua ?? 0) === 0}
+									<em class="opacity-60">Belum ada mata pelajaran di kelas ini.</em>
+								{:else}
+									<em class="opacity-60">Tidak ada yang cocok dengan filter.</em>
+								{/if}
 							</td>
 						</tr>
 					{/each}

@@ -3,9 +3,13 @@
 	import { page } from '$app/state';
 	import Icon from '$lib/components/icon.svelte';
 	import FormEnhance from '$lib/components/form-enhance.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
 	import { toast } from '$lib/components/toast.svelte';
 	import { buildPageNumbers, OPSI_BARIS_PER_HALAMAN } from '$lib/utils/pagination';
 	import { selectAll, semuaTerpilih, toggleId } from '$lib/utils/bulk-select';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
+
+	const KUNCI_FILTER = ['q', 'role'];
 
 	type Baris = {
 		id: number;
@@ -74,13 +78,8 @@
 		return [...map.entries()].sort((a, b) => b[1] - a[1]);
 	});
 
-	async function applySearch(value: string) {
-		const params = new URLSearchParams(page.url.search);
-		if (value.trim()) params.set('q', value.trim());
-		else params.delete('q');
-		params.delete('page');
-		const query = params.toString();
-		await goto(`${page.url.pathname}${query ? `?${query}` : ''}`, { keepFocus: true });
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
 	}
 
 	async function gotoPage(pageNumber: number) {
@@ -176,22 +175,26 @@
 		</div>
 	</div>
 
-	<div class="mb-4 flex flex-wrap items-center justify-between gap-2">
-		<div class="join w-full sm:max-w-sm">
-			<label class="input bg-base-200 dark:bg-base-300 join-item grow dark:border-none">
-				<Icon name="search" />
-				<input
-					type="search"
-					name="q"
-					bind:value={searchTerm}
-					spellcheck="false"
-					placeholder="Cari nama, NIK, atau username..."
-					autocomplete="off"
-					onchange={(event) => applySearch((event.currentTarget as HTMLInputElement).value)}
-				/>
-			</label>
+	<div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder="Cari nama, NIK, atau username..."
+			onSearch={(value) => terapkanFilter('q', value)}
+			pilih={[
+				{
+					name: 'role',
+					label: 'Peran',
+					value: String(data.filter?.role ?? ''),
+					opsis: [{ value: '', label: 'Semua Peran' }, ...(data.opsiRole ?? [])],
+					onChange: (v) => terapkanFilter('role', v)
+				}
+			]}
+			aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+			onReset={() =>
+				goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+		>
 			<select
-				class="select bg-base-200 dark:bg-base-300 join-item w-auto shrink dark:border-none"
+				class="select bg-base-200 dark:bg-base-300 w-auto shrink dark:border-none"
 				value={perHalaman}
 				title="Baris per halaman"
 				onchange={(event) =>
@@ -201,7 +204,7 @@
 					<option value={jumlah}>{jumlah} / hal</option>
 				{/each}
 			</select>
-		</div>
+		</FilterToolbar>
 		<div class="flex flex-wrap items-center gap-2">
 			{#each rekapRole as [role, jumlah] (role)}
 				<span class="badge badge-sm badge-soft badge-primary">{role} {jumlah}</span>
@@ -327,7 +330,13 @@
 				{:else}
 					<tr>
 						<td class="p-6 text-center" colspan="9">
-							<em class="opacity-60">Belum ada akun {data.kelompok.judul.toLowerCase()}.</em>
+							<em class="opacity-60">
+								{#if data.adaDataAwal}
+									Tidak ada akun {data.kelompok.judul.toLowerCase()} yang cocok dengan filter saat ini.
+								{:else}
+									Belum ada akun {data.kelompok.judul.toLowerCase()}.
+								{/if}
+							</em>
 						</td>
 					</tr>
 				{/each}

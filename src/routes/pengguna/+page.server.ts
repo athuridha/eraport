@@ -8,7 +8,7 @@ import {
 	tableAuthUserKelas
 } from '$lib/server/db/schema';
 import { tableSekolah } from '$lib/server/db/schema';
-import { sql, eq, inArray } from 'drizzle-orm';
+import { sql, eq, inArray, and, or, count, asc, type SQLWrapper } from 'drizzle-orm';
 import { authority } from './utils.server';
 import { hashPassword } from '$lib/server/auth';
 import { validatePasswordStrength } from '$lib/server/password-policy';
@@ -16,11 +16,53 @@ import { fail } from '@sveltejs/kit';
 
 const u = tableAuthUser;
 
+const LABEL_TIPE: Record<string, string> = {
+	admin: 'Admin',
+	kepala_sekolah: 'Kepala Sekolah',
+	wali_kelas: 'Wali Kelas',
+	wali_asuh: 'Wali Asuh',
+	user: 'Guru'
+};
+
 export async function load({ url, locals }) {
 	authority('user_list');
 
-	// TODO: implement pagination
-	const q = url.searchParams.get('q');
+	const q = url.searchParams.get('q')?.trim() || null;
+	const typeParam = url.searchParams.get('type')?.trim() || null;
+	const like = `%${q?.toLowerCase() ?? ''}%`;
+
+	// Filter conditions
+	const whereConditions: SQLWrapper[] = [];
+	if (typeParam) {
+		whereConditions.push(eq(u.type, typeParam as typeof u.$inferSelect.type));
+	}
+	if (q) {
+		whereConditions.push(
+			or(
+				sql`lower(${u.username}) like ${like}`,
+				sql`lower(coalesce(${tablePegawai.nama}, '')) like ${like}`,
+				sql`lower(coalesce(${tablePegawai.nik}, '')) like ${like}`
+			)!
+		);
+	}
+
+	const filterWhere = whereConditions.length > 0 ? and(...whereConditions) : undefined;
+
+	// Total count without filters vs with filters
+	const [[{ totalSemua }], [{ totalFiltered }], rawDistinctTypes] = await Promise.all([
+		db.select({ totalSemua: count() }).from(u),
+		db
+			.select({ totalFiltered: count() })
+			.from(u)
+			.leftJoin(tablePegawai, eq(u.pegawaiId, tablePegawai.id))
+			.where(filterWhere),
+		db.selectDistinct({ type: u.type }).from(u).orderBy(asc(u.type))
+	]);
+
+	const opsiTipe: { value: string; label: string }[] = rawDistinctTypes
+		.map((r) => r.type)
+		.filter((t): t is NonNullable<typeof t> => Boolean(t))
+		.map((t) => ({ value: String(t), label: LABEL_TIPE[t] ?? t }));
 
 	// Query users with joined pegawai and kelas
 	// For multi-kelas wali, we need to aggregate ALL kelas they manage
@@ -43,7 +85,7 @@ export async function load({ url, locals }) {
 		.from(u)
 		.leftJoin(tablePegawai, eq(u.pegawaiId, tablePegawai.id))
 		.leftJoin(tableKelas, eq(u.kelasId, tableKelas.id))
-		.where(q ? sql` lower(${u.username}) like ${'%' + q.toLowerCase() + '%'}` : undefined)
+		.where(filterWhere)
 		.orderBy(u.id)
 		.limit(1000);
 
@@ -203,7 +245,16 @@ export async function load({ url, locals }) {
 		}
 	}
 
-	return { meta: { title: 'Manajemen Pengguna' }, users };
+	return {
+		meta: { title: 'Manajemen Pengguna' },
+		users,
+		opsiTipe,
+		filter: { q: q ?? '', type: typeParam ?? '' },
+		counts: {
+			totalSemua,
+			totalFiltered
+		}
+	};
 }
 
 export const actions = {

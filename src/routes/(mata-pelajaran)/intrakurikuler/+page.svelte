@@ -1,12 +1,14 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { invalidate } from '$app/navigation';
+	import { goto, invalidate } from '$app/navigation';
 	import { enhance } from '$app/forms';
 	import Icon from '$lib/components/icon.svelte';
 	import { flip } from 'svelte/animate';
 	import { modalRoute } from '$lib/utils';
 	import ImportMapelDialog from '$lib/components/intrakurikuler/import-mapel-dialog.svelte';
 	import { toast } from '$lib/components/toast.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 	import {
 		agamaMapelLabelByName,
 		agamaMapelNames,
@@ -32,12 +34,38 @@
 			mapel: { daftarMapel: MapelWithIndicator[] };
 			kelasId?: number | null;
 			adaDataDapodik?: boolean;
+			q?: string;
+			jenis?: string;
+			opsiJenis?: { value: string; label: string }[];
+			totalSemua?: number;
+			totalFiltered?: number;
 		};
 	} = $props();
 
 	let importMapelOpen = $state(false);
 
-	const emptyStateMessage = 'Belum ada data mata pelajaran';
+	const KUNCI_FILTER = ['q', 'jenis'];
+
+	// svelte-ignore state_referenced_locally
+	let searchTerm = $state(data.q ?? '');
+
+	$effect(() => {
+		const latestQ = data.q ?? '';
+		if (searchTerm !== latestQ) {
+			searchTerm = latestQ;
+		}
+	});
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
+
+	const filterAktif = $derived(countActiveFilters(page.url, KUNCI_FILTER) > 0);
+	const emptyStateMessage = $derived(
+		(data.totalSemua ?? 0) === 0
+			? 'Belum ada data mata pelajaran'
+			: 'Tidak ada yang cocok dengan filter'
+	);
 	const agamaMapelNameSet = new Set<string>(agamaMapelNames);
 	const pksMapelNameSet = new Set<string>(pksMapelNames);
 
@@ -107,7 +135,7 @@
 			return true;
 		})
 	);
-	const totalMapel = $derived(daftarMapel.length);
+	const totalMapel = $derived(data.totalFiltered ?? daftarMapel.length);
 
 	const hitunganJenis = $derived.by(() => {
 		const acc: Record<MataPelajaran['jenis'], number> = {
@@ -264,21 +292,258 @@
 		</div>
 	</div>
 
-	<div class="mt-4 flex flex-wrap items-start justify-between gap-2">
-		{#if canEditUrutan && hasKelasAktif && !editUrutan}
-			<button
-				type="button"
-				class="btn btn-soft shadow-none order-2 w-full sm:order-1 sm:w-auto"
-				onclick={mulaiEditUrutan}
+	{#if !editUrutan}
+		<div class="mt-4">
+			<FilterToolbar
+				bind:q={searchTerm}
+				qPlaceholder="Cari nama/kode mapel..."
+				onSearch={(value) => terapkanFilter('q', value)}
+				pilih={[
+					{
+						name: 'jenis',
+						label: 'Jenis',
+						value: data.jenis ?? '',
+						opsis: [{ value: '', label: 'Semua Jenis' }, ...(data.opsiJenis ?? [])],
+						onChange: (v) => terapkanFilter('jenis', v)
+					}
+				]}
+				aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+				onReset={() =>
+					goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
 			>
-				<Icon name="menu-drawer" />
-				Edit Urutan
-			</button>
-		{:else if editUrutan}
+				{#if canEditUrutan && hasKelasAktif && !filterAktif}
+					<button type="button" class="btn btn-soft shadow-none" onclick={mulaiEditUrutan}>
+						<Icon name="menu-drawer" />
+						Edit Urutan
+					</button>
+				{:else if canEditUrutan && hasKelasAktif && filterAktif}
+					<button
+						type="button"
+						class="btn btn-soft shadow-none opacity-50 cursor-not-allowed"
+						disabled
+						title="Reset filter terlebih dahulu untuk mengatur urutan mata pelajaran"
+					>
+						<Icon name="menu-drawer" />
+						Edit Urutan
+					</button>
+				{/if}
+
+				<div class="ml-auto flex">
+					<a
+						class={`btn btn-soft rounded-r-none shadow-none ${!canAddImportMapel ? 'pointer-events-none opacity-50' : ''}`}
+						href={canAddImportMapel ? '/intrakurikuler/form' : '#'}
+						use:modalRoute={canAddImportMapel ? 'add-mapel' : ''}
+						aria-disabled={!canAddImportMapel}
+					>
+						<Icon name="plus" />
+						Tambah Mapel
+					</a>
+
+					<div class="dropdown dropdown-end">
+						<button
+							title="Export dan Import mata pelajaran"
+							type="button"
+							tabindex="0"
+							class={`btn btn-soft rounded-l-none shadow-none ${!canAddImportMapel ? 'opacity-50' : ''}`}
+							disabled={!canAddImportMapel}
+							aria-disabled={!canAddImportMapel}
+						>
+							<Icon name="down" />
+						</button>
+
+						<ul
+							tabindex="-1"
+							class="dropdown-content menu bg-base-100 border-base-300 z-50 mt-2 w-49 rounded-md border p-2 shadow-lg"
+						>
+							<li>
+								<button
+									type="button"
+									class={`w-full text-left ${!canAddImportMapel ? 'pointer-events-none opacity-50' : ''}`}
+									disabled={!canAddImportMapel}
+									aria-disabled={!canAddImportMapel}
+									onclick={() => (importMapelOpen = true)}
+								>
+									<Icon name="import" />
+									Impor Mapel
+								</button>
+							</li>
+							<li>
+								<button
+									type="button"
+									class={`w-full text-left ${!canAddImportMapel ? 'pointer-events-none opacity-50' : ''}`}
+									disabled={!canAddImportMapel}
+									aria-disabled={!canAddImportMapel}
+									onclick={async () => {
+										try {
+											const resp = await fetch('/intrakurikuler/export_mapel', { method: 'GET' });
+											if (!resp.ok) {
+												const body = await resp.json().catch(() => ({}));
+												return toast({
+													message: body?.fail || 'Gagal mengekspor data.',
+													type: 'error'
+												});
+											}
+											const blob = await resp.blob();
+											const url = URL.createObjectURL(blob);
+											let filename = `mapel-${new Date().toISOString().slice(0, 10)}.xlsx`;
+											try {
+												const cd =
+													resp.headers.get('content-disposition') ||
+													resp.headers.get('Content-Disposition');
+												if (cd) {
+													const mStar = cd.match(/filename\*=UTF-8''([^;\n\r]+)/i);
+													const mBasic = cd.match(/filename="?([^";]+)"?/i);
+													if (mStar && mStar[1]) filename = decodeURIComponent(mStar[1]);
+													else if (mBasic && mBasic[1]) filename = mBasic[1];
+												}
+											} catch {
+												/* ignore and fallback */
+											}
+											const a = document.createElement('a');
+											a.href = url;
+											a.download = filename;
+											document.body.appendChild(a);
+											a.click();
+											a.remove();
+											URL.revokeObjectURL(url);
+										} catch (err) {
+											console.error(err);
+											toast({ message: 'Terjadi kesalahan saat mengekspor.', type: 'error' });
+										}
+									}}
+								>
+									<Icon name="export" />
+									Ekspor Mapel
+								</button>
+							</li>
+							<li>
+								<form
+									method="POST"
+									action="?/tambah_pks"
+									class="w-full"
+									use:enhance={() => {
+										toast({ message: 'Menambahkan mata pelajaran PKS...', type: 'info' });
+										return async ({ result }) => {
+											if (result.type === 'success') {
+												await Promise.all([
+													invalidate('app:mapel'),
+													invalidate('app:asesmen-formatif')
+												]);
+												const data = result.data as { success?: string } | undefined;
+												toast({
+													message: data?.success || 'Mata pelajaran PKS berhasil ditambahkan.',
+													type: 'success'
+												});
+											} else if (result.type === 'failure') {
+												const data = result.data as { fail?: string } | undefined;
+												toast({
+													message: data?.fail || 'Gagal menambahkan mata pelajaran PKS.',
+													type: 'error'
+												});
+											}
+										};
+									}}
+								>
+									<button
+										type="submit"
+										class={`flex w-full items-center gap-2 ${!canAddImportMapel || !hasKelasAktif ? 'pointer-events-none opacity-50' : ''}`}
+										disabled={!canAddImportMapel || !hasKelasAktif}
+										aria-disabled={!canAddImportMapel || !hasKelasAktif}
+									>
+										<Icon name="plus" />
+										<span>Tambah PKS</span>
+									</button>
+								</form>
+							</li>
+							<li>
+								<form
+									method="POST"
+									action="?/tambah_agama"
+									class="w-full"
+									use:enhance={() => {
+										toast({ message: 'Menambahkan mata pelajaran Agama...', type: 'info' });
+										return async ({ result }) => {
+											if (result.type === 'success') {
+												await Promise.all([
+													invalidate('app:mapel'),
+													invalidate('app:asesmen-formatif')
+												]);
+												const data = result.data as { success?: string } | undefined;
+												toast({
+													message: data?.success || 'Mata pelajaran Agama berhasil ditambahkan.',
+													type: 'success'
+												});
+											} else if (result.type === 'failure') {
+												const data = result.data as { fail?: string } | undefined;
+												toast({
+													message: data?.fail || 'Gagal menambahkan mata pelajaran Agama.',
+													type: 'error'
+												});
+											}
+										};
+									}}
+								>
+									<button
+										type="submit"
+										class={`flex w-full items-center gap-2 ${!canAddImportMapel || !hasKelasAktif ? 'pointer-events-none opacity-50' : ''}`}
+										disabled={!canAddImportMapel || !hasKelasAktif}
+										aria-disabled={!canAddImportMapel || !hasKelasAktif}
+									>
+										<Icon name="plus" />
+										<span>Tambah Agama</span>
+									</button>
+								</form>
+							</li>
+							<li>
+								<form
+									method="POST"
+									action="?/tambah_mapel_umum"
+									class="w-full"
+									use:enhance={() => {
+										toast({ message: 'Menerapkan mata pelajaran umum...', type: 'info' });
+										return async ({ result }) => {
+											if (result.type === 'success') {
+												await Promise.all([
+													invalidate('app:mapel'),
+													invalidate('app:asesmen-formatif'),
+													invalidate('app:asesmen-sumatif')
+												]);
+												const data = result.data as { success?: string } | undefined;
+												toast({
+													message: data?.success || 'Mata pelajaran umum berhasil diterapkan.',
+													type: 'success'
+												});
+											} else if (result.type === 'failure') {
+												const data = result.data as { fail?: string } | undefined;
+												toast({
+													message: data?.fail || 'Gagal menerapkan mata pelajaran umum.',
+													type: 'error'
+												});
+											}
+										};
+									}}
+								>
+									<button
+										type="submit"
+										class="flex w-full items-center gap-2 text-primary font-medium"
+										title="Terapkan 13 mata pelajaran umum standar ke kelas / semua kelas"
+									>
+										<Icon name="layers" />
+										<span>Terapkan Mapel Umum</span>
+									</button>
+								</form>
+							</li>
+						</ul>
+					</div>
+				</div>
+			</FilterToolbar>
+		</div>
+	{:else}
+		<div class="mt-4 flex flex-wrap items-center justify-between gap-2">
 			<form
 				method="POST"
 				action="?/simpan_urutan"
-				class="order-2 flex w-full sm:order-1 sm:w-auto"
+				class="flex w-full sm:w-auto"
 				use:enhance={() => {
 					simpanUrutanPending = true;
 					return async ({ result, update }) => {
@@ -323,224 +588,8 @@
 					Batal
 				</button>
 			</form>
-		{/if}
-
-		<div class="order-1 max-sm:w-full sm:order-2 sm:ml-auto">
-			<div class="flex">
-				<a
-					class={`btn btn-soft rounded-r-none shadow-none max-sm:flex-1 ${!canAddImportMapel ? 'pointer-events-none opacity-50' : ''}`}
-					href={canAddImportMapel ? '/intrakurikuler/form' : '#'}
-					use:modalRoute={canAddImportMapel ? 'add-mapel' : ''}
-					aria-disabled={!canAddImportMapel}
-				>
-					<Icon name="plus" />
-					Tambah Mapel
-				</a>
-
-				<!-- dropdown yang tergabung (perhatikan join-item dan hilangkan margin m-1) -->
-				<div class="dropdown dropdown-end">
-					<!-- trigger: gunakan button bertipe btn supaya tampil seperti item lain -->
-					<button
-						title="Export dan Import mata pelajaran"
-						type="button"
-						tabindex="0"
-						class={`btn btn-soft rounded-l-none shadow-none ${!canAddImportMapel ? 'opacity-50' : ''}`}
-						disabled={!canAddImportMapel}
-						aria-disabled={!canAddImportMapel}
-					>
-						<Icon name="down" />
-					</button>
-
-					<!-- menu dropdown -->
-					<ul
-						tabindex="-1"
-						class="dropdown-content menu bg-base-100 border-base-300 z-50 mt-2 w-49 rounded-md border p-2 shadow-lg"
-					>
-						<li>
-							<button
-								type="button"
-								class={`w-full text-left ${!canAddImportMapel ? 'pointer-events-none opacity-50' : ''}`}
-								disabled={!canAddImportMapel}
-								aria-disabled={!canAddImportMapel}
-								onclick={() => (importMapelOpen = true)}
-							>
-								<Icon name="import" />
-								Impor Mapel
-							</button>
-						</li>
-						<li>
-							<button
-								type="button"
-								class={`w-full text-left ${!canAddImportMapel ? 'pointer-events-none opacity-50' : ''}`}
-								disabled={!canAddImportMapel}
-								aria-disabled={!canAddImportMapel}
-								onclick={async () => {
-									try {
-										const resp = await fetch('/intrakurikuler/export_mapel', { method: 'GET' });
-										if (!resp.ok) {
-											const body = await resp.json().catch(() => ({}));
-											return toast({
-												message: body?.fail || 'Gagal mengekspor data.',
-												type: 'error'
-											});
-										}
-										const blob = await resp.blob();
-										const url = URL.createObjectURL(blob);
-										// prefer filename from Content-Disposition header set by server
-										let filename = `mapel-${new Date().toISOString().slice(0, 10)}.xlsx`;
-										try {
-											const cd =
-												resp.headers.get('content-disposition') ||
-												resp.headers.get('Content-Disposition');
-											if (cd) {
-												// match filename*=UTF-8''encoded or filename="name"
-												const mStar = cd.match(/filename\*=UTF-8''([^;\n\r]+)/i);
-												const mBasic = cd.match(/filename="?([^";]+)"?/i);
-												if (mStar && mStar[1]) filename = decodeURIComponent(mStar[1]);
-												else if (mBasic && mBasic[1]) filename = mBasic[1];
-											}
-										} catch {
-											/* ignore and fallback */
-										}
-										const a = document.createElement('a');
-										a.href = url;
-										a.download = filename;
-										document.body.appendChild(a);
-										a.click();
-										a.remove();
-										URL.revokeObjectURL(url);
-									} catch (err) {
-										console.error(err);
-										toast({ message: 'Terjadi kesalahan saat mengekspor.', type: 'error' });
-									}
-								}}
-							>
-								<Icon name="export" />
-								Ekspor Mapel
-							</button>
-						</li>
-						<li>
-							<form
-								method="POST"
-								action="?/tambah_pks"
-								class="w-full"
-								use:enhance={() => {
-									toast({ message: 'Menambahkan mata pelajaran PKS...', type: 'info' });
-									return async ({ result }) => {
-										if (result.type === 'success') {
-											await Promise.all([
-												invalidate('app:mapel'),
-												invalidate('app:asesmen-formatif')
-											]);
-											const data = result.data as { success?: string } | undefined;
-											toast({
-												message: data?.success || 'Mata pelajaran PKS berhasil ditambahkan.',
-												type: 'success'
-											});
-										} else if (result.type === 'failure') {
-											const data = result.data as { fail?: string } | undefined;
-											toast({
-												message: data?.fail || 'Gagal menambahkan mata pelajaran PKS.',
-												type: 'error'
-											});
-										}
-									};
-								}}
-							>
-								<button
-									type="submit"
-									class={`flex w-full items-center gap-2 ${!canAddImportMapel || !hasKelasAktif ? 'pointer-events-none opacity-50' : ''}`}
-									disabled={!canAddImportMapel || !hasKelasAktif}
-									aria-disabled={!canAddImportMapel || !hasKelasAktif}
-								>
-									<Icon name="plus" />
-									<span>Tambah PKS</span>
-								</button>
-							</form>
-						</li>
-						<li>
-							<form
-								method="POST"
-								action="?/tambah_agama"
-								class="w-full"
-								use:enhance={() => {
-									toast({ message: 'Menambahkan mata pelajaran Agama...', type: 'info' });
-									return async ({ result }) => {
-										if (result.type === 'success') {
-											await Promise.all([
-												invalidate('app:mapel'),
-												invalidate('app:asesmen-formatif')
-											]);
-											const data = result.data as { success?: string } | undefined;
-											toast({
-												message: data?.success || 'Mata pelajaran Agama berhasil ditambahkan.',
-												type: 'success'
-											});
-										} else if (result.type === 'failure') {
-											const data = result.data as { fail?: string } | undefined;
-											toast({
-												message: data?.fail || 'Gagal menambahkan mata pelajaran Agama.',
-												type: 'error'
-											});
-										}
-									};
-								}}
-							>
-								<button
-									type="submit"
-									class={`flex w-full items-center gap-2 ${!canAddImportMapel || !hasKelasAktif ? 'pointer-events-none opacity-50' : ''}`}
-									disabled={!canAddImportMapel || !hasKelasAktif}
-									aria-disabled={!canAddImportMapel || !hasKelasAktif}
-								>
-									<Icon name="plus" />
-									<span>Tambah Agama</span>
-								</button>
-							</form>
-						</li>
-						<li>
-							<form
-								method="POST"
-								action="?/tambah_mapel_umum"
-								class="w-full"
-								use:enhance={() => {
-									toast({ message: 'Menerapkan mata pelajaran umum...', type: 'info' });
-									return async ({ result }) => {
-										if (result.type === 'success') {
-											await Promise.all([
-												invalidate('app:mapel'),
-												invalidate('app:asesmen-formatif'),
-												invalidate('app:asesmen-sumatif')
-											]);
-											const data = result.data as { success?: string } | undefined;
-											toast({
-												message: data?.success || 'Mata pelajaran umum berhasil diterapkan.',
-												type: 'success'
-											});
-										} else if (result.type === 'failure') {
-											const data = result.data as { fail?: string } | undefined;
-											toast({
-												message: data?.fail || 'Gagal menerapkan mata pelajaran umum.',
-												type: 'error'
-											});
-										}
-									};
-								}}
-							>
-								<button
-									type="submit"
-									class="flex w-full items-center gap-2 text-primary font-medium"
-									title="Terapkan 13 mata pelajaran umum standar ke kelas / semua kelas"
-								>
-									<Icon name="layers" />
-									<span>Terapkan Mapel Umum</span>
-								</button>
-							</form>
-						</li>
-					</ul>
-				</div>
-			</div>
 		</div>
-	</div>
+	{/if}
 
 	{#if !hasKelasAktif}
 		<div
@@ -554,10 +603,7 @@
 	{#if hasKelasAktif && totalMapel === 0}
 		<div class="alert border-info/60 bg-info/10 mt-6 border border-dashed">
 			<Icon name="info" />
-			<span
-				>Belum ada data mata pelajaran untuk kelas ini. Gunakan tombol &ldquo;Tambah Mata
-				Pelajaran&rdquo; di atas.</span
-			>
+			<span>{emptyStateMessage}</span>
 		</div>
 	{/if}
 

@@ -6,7 +6,7 @@ import {
 	tableKelas
 } from '$lib/server/db/schema';
 import { fail } from '@sveltejs/kit';
-import { and, asc, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { readBufferToAoA } from '$lib/utils/excel.js';
 import { cookieNames } from '$lib/utils';
 import { isAdminUser } from '../../pengguna/permissions';
@@ -41,7 +41,7 @@ function kelasIdDariCookie(nilai: string | undefined | null) {
 	return Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-export async function load({ depends, parent, locals }) {
+export async function load({ depends, parent, locals, url }) {
 	depends('app:ekstrakurikuler');
 	const { kelasAktif } = await parent();
 	const kelasId = kelasAktif?.id ?? null;
@@ -50,16 +50,28 @@ export async function load({ depends, parent, locals }) {
 	// yang berlaku untuk semua kelas tanpa memilih kelas tertentu.
 	const umumMode = !kelasId && isAdminUser(locals.user ?? undefined);
 
+	const q = url.searchParams.get('q')?.trim() ?? '';
+	const searchCondition = q ? like(tableEkstrakurikuler.nama, `%${q}%`) : undefined;
+
 	let ekstrakurikulerRaw: Awaited<ReturnType<typeof db.query.tableEkstrakurikuler.findMany>> = [];
 	let tableReady = true;
+	let totalAll = 0;
 
 	if (kelasId) {
+		const baseScope = or(
+			eq(tableEkstrakurikuler.kelasId, kelasId),
+			eq(tableEkstrakurikuler.semuaKelas, 1)
+		);
 		try {
+			const [countRes] = await db
+				.select({ count: sql<number>`count(*)` })
+				.from(tableEkstrakurikuler)
+				.where(baseScope);
+			totalAll = countRes?.count ?? 0;
+
+			const rowCondition = searchCondition ? and(baseScope, searchCondition) : baseScope;
 			ekstrakurikulerRaw = await db.query.tableEkstrakurikuler.findMany({
-				where: or(
-					eq(tableEkstrakurikuler.kelasId, kelasId),
-					eq(tableEkstrakurikuler.semuaKelas, 1)
-				),
+				where: rowCondition,
 				orderBy: asc(tableEkstrakurikuler.createdAt)
 			});
 		} catch (error) {
@@ -81,11 +93,19 @@ export async function load({ depends, parent, locals }) {
 						.where(eq(tableKelas.sekolahId, sekolahId))
 				).map((row) => row.id);
 				if (kelasIds.length) {
+					const baseScope = and(
+						inArray(tableEkstrakurikuler.kelasId, kelasIds),
+						eq(tableEkstrakurikuler.semuaKelas, 1)
+					);
+					const [countRes] = await db
+						.select({ count: sql<number>`count(*)` })
+						.from(tableEkstrakurikuler)
+						.where(baseScope);
+					totalAll = countRes?.count ?? 0;
+
+					const rowCondition = searchCondition ? and(baseScope, searchCondition) : baseScope;
 					ekstrakurikulerRaw = await db.query.tableEkstrakurikuler.findMany({
-						where: and(
-							inArray(tableEkstrakurikuler.kelasId, kelasIds),
-							eq(tableEkstrakurikuler.semuaKelas, 1)
-						),
+						where: rowCondition,
 						orderBy: asc(tableEkstrakurikuler.createdAt)
 					});
 				}
@@ -104,7 +124,10 @@ export async function load({ depends, parent, locals }) {
 		kelasId,
 		tableReady,
 		lingkupUmum: umumMode,
-		ekstrakurikuler: ekstrakurikulerRaw
+		ekstrakurikuler: ekstrakurikulerRaw,
+		q,
+		totalAll,
+		kosongKarenaFilter: totalAll > 0 && ekstrakurikulerRaw.length === 0 && Boolean(q)
 	};
 }
 

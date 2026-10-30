@@ -31,6 +31,8 @@
 		cloneBobotState
 	} from '$lib/utils/tp-rl';
 	import Header from '$lib/components/intrakurikuler/header.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 	import {
 		groupKey as utilGroupKey,
 		removeSelectionByKey as utilRemoveSelectionByKey,
@@ -46,6 +48,23 @@
 	import { page } from '$app/state';
 	import SvelteURLSearchParams from '$lib/svelte-helpers/url-search-params';
 	let { data } = $props();
+
+	const KUNCI_FILTER = ['q'];
+
+	// svelte-ignore state_referenced_locally
+	let searchTerm = $state(data.q ?? '');
+
+	$effect(() => {
+		const latestQ = data.q ?? '';
+		if (searchTerm !== latestQ) {
+			searchTerm = latestQ;
+		}
+	});
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
+
 	const AGAMA_PARENT_NAME = 'Pendidikan Agama dan Budi Pekerti';
 	const PKS_PARENT_NAME = 'Pendalaman Kitab Suci';
 	const isAgamaParentMapel = $derived(data.mapel.nama === AGAMA_PARENT_NAME);
@@ -981,6 +1000,16 @@
 			<span>Pilih agama terlebih dahulu sebelum menambahkan tujuan pembelajaran.</span>
 		</div>
 	{/if}
+	<div class="my-3">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder="Cari TP/RL..."
+			onSearch={(value) => terapkanFilter('q', value)}
+			aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+			onReset={() =>
+				goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+		/>
+	</div>
 	<div class="bg-base-100 dark:bg-base-200 overflow-x-auto rounded-md shadow-md dark:shadow-none">
 		<table class="border-base-200 table border dark:border-none">
 			<thead>
@@ -1053,7 +1082,9 @@
 					{/each}
 				{:else if !(groupForm && groupForm.mode === 'create')}
 					<tr>
-						<td class="text-center italic opacity-50" colspan="5">Belum ada data</td>
+						<td class="py-6 text-center italic opacity-60" colspan="6">
+							{data.kosongKarenaFilter ? 'Tidak ada yang cocok dengan filter' : 'Belum ada data'}
+						</td>
 					</tr>
 				{/if}
 			</tbody>

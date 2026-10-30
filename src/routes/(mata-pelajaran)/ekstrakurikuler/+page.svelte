@@ -1,13 +1,15 @@
 <script lang="ts">
-	import { invalidate } from '$app/navigation';
+	import { goto, invalidate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { tick } from 'svelte';
 	import FormEnhance from '$lib/components/form-enhance.svelte';
 	import Icon from '$lib/components/icon.svelte';
 	import EkstrakurikulerDeleteModal from '$lib/components/ekstrakurikuler/delete-modal.svelte';
 	import ImportEkstraDialog from '$lib/components/ekstrakurikuler/import-ekstra-dialog.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
 	import { showModal } from '$lib/components/global-modal.svelte';
 	import { toast } from '$lib/components/toast.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 
 	let {
 		data
@@ -17,8 +19,26 @@
 			tableReady: boolean;
 			lingkupUmum: boolean;
 			ekstrakurikuler: Ekstrakurikuler[];
+			q?: string;
+			kosongKarenaFilter?: boolean;
 		};
 	} = $props();
+
+	const KUNCI_FILTER = ['q'];
+
+	// svelte-ignore state_referenced_locally
+	let searchTerm = $state(data.q ?? '');
+
+	$effect(() => {
+		const latestQ = data.q ?? '';
+		if (searchTerm !== latestQ) {
+			searchTerm = latestQ;
+		}
+	});
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
 
 	let selectedIds = $state<number[]>([]);
 	let selectAllCheckbox: HTMLInputElement | null = null;
@@ -411,6 +431,17 @@
 		</div>
 	{/if}
 
+	<div class="mt-4">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder="Cari nama/pembina ekstrakurikuler..."
+			onSearch={(value) => terapkanFilter('q', value)}
+			aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+			onReset={() =>
+				goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+		/>
+	</div>
+
 	<div
 		class="bg-base-100 dark:bg-base-200 mt-4 overflow-x-auto rounded-md shadow-md dark:shadow-none"
 	>
@@ -662,7 +693,9 @@
 					{#if !addRowVisible}
 						<tr>
 							<td class="py-6 text-center italic opacity-60" colspan="5">
-								Belum ada data ekstrakurikuler
+								{data.kosongKarenaFilter
+									? 'Tidak ada yang cocok dengan filter'
+									: 'Belum ada data ekstrakurikuler'}
 							</td>
 						</tr>
 					{/if}

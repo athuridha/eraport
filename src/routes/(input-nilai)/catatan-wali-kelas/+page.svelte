@@ -8,12 +8,14 @@
 	import { toast } from '$lib/components/toast.svelte';
 	import { searchQueryMarker } from '$lib/utils';
 	import { buildPageNumbers, OPSI_BARIS_PER_HALAMAN } from '$lib/utils/pagination';
-	import { onDestroy, tick } from 'svelte';
+	import { tick } from 'svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 
 	let { data } = $props();
+	const KUNCI_FILTER = ['q'];
 	// svelte-ignore state_referenced_locally
 	let searchTerm = $state(data.page.search ?? '');
-	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 	let editingRowId = $state<number | null>(null);
 	let editingTextarea = $state<HTMLTextAreaElement | null>(null);
 	let editingCatatan = $state('');
@@ -47,7 +49,6 @@
 	const muridIdsPayload = $derived.by(() => JSON.stringify(muridIds));
 
 	$effect(() => {
-		if (searchTimer) return;
 		const latestSearchTerm = data.page.search ?? '';
 		if (searchTerm !== latestSearchTerm) {
 			searchTerm = latestSearchTerm;
@@ -70,33 +71,8 @@
 
 	import SvelteURLSearchParams from '$lib/svelte-helpers/url-search-params';
 
-	function buildSearchUrl(rawValue: string) {
-		const params = new SvelteURLSearchParams(page.url.search);
-		const cleaned = rawValue.trim();
-		const current = params.get('q') ?? '';
-		const searchChanged = cleaned !== current;
-		if (cleaned) {
-			params.set('q', cleaned);
-		} else {
-			params.delete('q');
-		}
-		if (searchChanged) {
-			params.delete('page');
-		}
-		const nextQuery = params.toString();
-		const nextUrl = `${page.url.pathname}${nextQuery ? `?${nextQuery}` : ''}`;
-		const currentUrl = `${page.url.pathname}${page.url.search}`;
-		if (nextUrl === currentUrl) {
-			return null;
-		}
-		return nextUrl;
-	}
-
-	async function applySearch(rawValue: string) {
-		const target = buildSearchUrl(rawValue);
-		if (!target) return;
-		searchTimer = undefined;
-		await goto(target, { replaceState: true, keepFocus: true });
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
 	}
 
 	function buildPageUrl(pageNumber: number) {
@@ -152,34 +128,6 @@
 		if (pageNumber === currentPage) return;
 		void gotoPage(pageNumber);
 	}
-
-	function handleSearchInput(event: Event) {
-		const value = (event.currentTarget as HTMLInputElement).value;
-		searchTerm = value;
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = setTimeout(() => {
-			searchTimer = undefined;
-			void applySearch(value);
-		}, 400);
-	}
-
-	function submitSearch(event: Event) {
-		event.preventDefault();
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-			searchTimer = undefined;
-		}
-		void applySearch(searchTerm);
-	}
-
-	onDestroy(() => {
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-			searchTimer = undefined;
-		}
-	});
 
 	function startEdit(row: { id: number; catatan: string | null }) {
 		if (editingRowId === row.id) return;
@@ -286,27 +234,17 @@
 		{/each}
 	</div>
 
-	<form
-		class="flex flex-col items-center gap-2 sm:flex-row"
-		data-sveltekit-keepfocus
-		data-sveltekit-replacestate
-		onsubmit={submitSearch}
-	>
-		<div class="join w-full">
-			<label class="input bg-base-200 dark:bg-base-300 join-item grow dark:border-none">
-				<Icon name="search" />
-				<input
-					type="search"
-					name="q"
-					value={searchTerm}
-					spellcheck="false"
-					placeholder="Cari nama murid..."
-					autocomplete="name"
-					oninput={handleSearchInput}
-				/>
-			</label>
+	<div class="mb-4 flex flex-col gap-2 sm:flex-row">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder="Cari nama murid..."
+			onSearch={(value) => terapkanFilter('q', value)}
+			aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+			onReset={() =>
+				goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+		>
 			<select
-				class="select bg-base-200 dark:bg-base-300 join-item w-auto shrink dark:border-none"
+				class="select bg-base-200 dark:bg-base-300 w-auto shrink dark:border-none"
 				value={data.page.perPage}
 				title="Baris per halaman"
 				onchange={(event) =>
@@ -316,8 +254,8 @@
 					<option value={jumlah}>{jumlah} / hal</option>
 				{/each}
 			</select>
-		</div>
-	</form>
+		</FilterToolbar>
+	</div>
 
 	<div
 		class="bg-base-100 dark:bg-base-200 mt-4 overflow-x-auto rounded-md shadow-md dark:shadow-none"

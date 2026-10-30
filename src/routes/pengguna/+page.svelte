@@ -1,12 +1,25 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { showModal, updateModal } from '$lib/components/global-modal.svelte';
 	import { toast } from '$lib/components/toast.svelte';
 	import AlertWarning from '$lib/components/alert-warning.svelte';
+	import Icon from '$lib/components/icon.svelte';
 	import UsersHeader from '$lib/components/pengguna/UsersHeader.svelte';
 	import ExistingUserRow from '$lib/components/pengguna/ExistingUserRow.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 
 	let { data } = $props();
+
+	const KUNCI_FILTER = ['q', 'type'];
+
+	// svelte-ignore state_referenced_locally
+	let searchTerm = $state(data.filter?.q ?? '');
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
 
 	// local reactive users copy so UI updates instantly without full reload
 	// base shape mirrors load's users (never hardcode) + local-only fields
@@ -204,53 +217,86 @@
 			</div>
 			<UsersHeader {selectedIds} onDelete={handleDelete} onAdd={handleAdd} />
 		</header>
-		<div class="overflow-x-auto">
-			<table class="table">
-				<thead>
-					<tr>
-						<th>
-							<input
-								type="checkbox"
-								class="checkbox"
-								checked={selectableIds.length > 0 &&
-									selectableIds.every((id) => selectedIds.indexOf(id) !== -1)}
-								onclick={() => toggleSelectAll()}
-							/>
-						</th>
-						<th>Nama</th>
-						<th>Role</th>
-						<th>NIK / Username</th>
-						<th>Aksi</th>
-						<th>Hak Akses</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each users as u (u.id)}
-						<tr>
-							<td>
-								{#if u.id !== 1 && u.username?.toLowerCase() !== 'admin'}
-									<input
-										type="checkbox"
-										class="checkbox"
-										checked={selectedIds.indexOf(u.id) !== -1}
-										onclick={() => toggleSelect(u.id)}
-									/>
-								{/if}
-							</td>
 
-							<ExistingUserRow
-								{u}
-								onEdit={handleEdit}
-								onOpenUser={(user: LocalUser) => {
-									window.location.href = '/pengguna/' + user.id;
-								}}
-								onDelete={(user: LocalUser) => openDeleteModalForIds([Number(user.id)])}
-								onSwitch={handleSwitch}
-							/>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
+		<div>
+			<FilterToolbar
+				bind:q={searchTerm}
+				qPlaceholder="Cari nama/NIP/NIK..."
+				onSearch={(value) => terapkanFilter('q', value)}
+				pilih={[
+					{
+						name: 'type',
+						label: 'Peran',
+						value: page.url.searchParams.get('type') ?? '',
+						opsis: [{ value: '', label: 'Semua Peran' }, ...(data.opsiTipe ?? [])],
+						onChange: (v) => terapkanFilter('type', v)
+					}
+				]}
+				aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+				onReset={() =>
+					goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+			/>
 		</div>
+
+		{#if (data.counts?.totalSemua ?? 0) === 0}
+			<div class="alert alert-soft alert-warning">
+				<Icon name="alert" />
+				<span>Belum ada pengguna.</span>
+			</div>
+		{:else if users.length === 0}
+			<div class="alert alert-soft alert-info">
+				<Icon name="info" />
+				<span>Tidak ada yang cocok dengan filter.</span>
+			</div>
+		{:else}
+			<div class="overflow-x-auto">
+				<table class="table">
+					<thead>
+						<tr>
+							<th>
+								<input
+									type="checkbox"
+									class="checkbox"
+									checked={selectableIds.length > 0 &&
+										selectableIds.every((id) => selectedIds.indexOf(id) !== -1)}
+									onclick={() => toggleSelectAll()}
+								/>
+							</th>
+							<th>Nama</th>
+							<th>Role</th>
+							<th>NIK / Username</th>
+							<th>Aksi</th>
+							<th>Hak Akses</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each users as u (u.id)}
+							<tr>
+								<td>
+									{#if u.id !== 1 && u.username?.toLowerCase() !== 'admin'}
+										<input
+											type="checkbox"
+											class="checkbox"
+											checked={selectedIds.indexOf(u.id) !== -1}
+											onclick={() => toggleSelect(u.id)}
+										/>
+									{/if}
+								</td>
+
+								<ExistingUserRow
+									{u}
+									onEdit={handleEdit}
+									onOpenUser={(user: LocalUser) => {
+										window.location.href = '/pengguna/' + user.id;
+									}}
+									onDelete={(user: LocalUser) => openDeleteModalForIds([Number(user.id)])}
+									onSwitch={handleSwitch}
+								/>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
 	</div>
 </section>

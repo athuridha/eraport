@@ -193,18 +193,13 @@ async function main() {
 		}
 	}
 
-	// 7) Bundle database
-	const dbPath = path.join(projectRoot, 'data', 'database.sqlite3');
-	if (fs.existsSync(dbPath)) {
-		console.info('Bundling default SQLite database...');
-		const dataDir = path.join(appStage, 'data');
-		fs.mkdirSync(dataDir, { recursive: true });
-		fs.copyFileSync(dbPath, path.join(dataDir, 'database.sqlite3'));
-	} else {
-		console.warn(
-			'Default SQLite database not found; continuing without bundling data/database.sqlite3.'
-		);
-	}
+	// 7) Basis data TIDAK dibundel. Instalasi mulai dengan DB kosong: skema dibuat
+	// migrate-installed-db.mjs saat instalasi, akun Admin oleh ensureDefaultAdmin()
+	// saat start pertama, lalu data diambil dari Database Pusat lewat halaman
+	// Sinkronisasi (?/tarikPusat) memakai kredensial cloud di .env.
+	// (Sebelumnya data/database.sqlite3 ikut dibundel; kredensial lokal/akun uji
+	// jangan sampai ikut ke mesin penerima.)
+	console.info('Skipping database bundling (data comes from cloud pull).');
 
 	// 8) Generate runtime package.json
 	console.info('Generating runtime package manifest...');
@@ -384,6 +379,128 @@ async function main() {
 		if (fs.existsSync(p)) {
 			fs.rmSync(p, { recursive: true, force: true });
 			console.info('Removed', p);
+		}
+	}
+
+	// 14b) Compile the desktop shell (e-Rapor.exe): a WebView2 host window so the
+	//      installed app opens as a real desktop app — single window with the
+	//      school logo, no terminal and no browser tab. Compiled with the .NET
+	//      Framework C# compiler (csc.exe) that ships with every Windows 10/11;
+	//      the official Microsoft.Web.WebView2 interop comes from NuGet. When the
+	//      compiler or download is unavailable the installer simply stays
+	//      browser-mode (shortcuts open the default browser), never broken.
+	console.info('Compiling desktop shell (e-Rapor.exe)...');
+	const interopDir = path.resolve(projectRoot, 'dist', 'windows', 'webview2-interop');
+	const interopCore = path.join(interopDir, 'Microsoft.Web.WebView2.Core.dll');
+	const interopWinForms = path.join(interopDir, 'Microsoft.Web.WebView2.WinForms.dll');
+	const interopLoader = path.join(interopDir, 'WebView2Loader.dll');
+	const interopNupkg = path.resolve(projectRoot, 'dist', 'windows', 'wv2.nupkg');
+	const INTEROP_VERSION = '1.0.2903.40';
+	if (
+		!fs.existsSync(interopCore) ||
+		!fs.existsSync(interopWinForms) ||
+		!fs.existsSync(interopLoader)
+	) {
+		fs.mkdirSync(interopDir, { recursive: true });
+		try {
+			if (!fs.existsSync(interopNupkg)) {
+				run('curl', [
+					'-sL',
+					'--max-time',
+					'300',
+					'-o',
+					interopNupkg,
+					`https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/${INTEROP_VERSION}/microsoft.web.webview2.${INTEROP_VERSION}.nupkg`
+				]);
+			}
+			// bsdtar (bawaan Windows 10+) bisa mengekstrak anggota tertentu dari zip.
+			// lib/net462 → 2 komponen di atas; build/native/x64/… → 3 komponen.
+			run('tar', [
+				'-xf',
+				interopNupkg,
+				'-C',
+				interopDir,
+				'--strip-components=2',
+				'--include=lib/net462/*'
+			]);
+			run('tar', [
+				'-xf',
+				interopNupkg,
+				'-C',
+				interopDir,
+				'--strip-components=3',
+				'--include=build/native/x64/WebView2Loader.dll'
+			]);
+		} catch (err) {
+			console.warn('Gagal menyiapkan interop WebView2:', err && (err.message || err));
+		}
+	}
+	const cscPath = [
+		'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe',
+		'C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe'
+	].find((p) => fs.existsSync(p));
+	if (!cscPath) console.warn('csc.exe (.NET Framework) tidak ditemukan; shell desktop dilewati.');
+	if (cscPath && fs.existsSync(interopCore) && fs.existsSync(interopWinForms)) {
+		const shellSource = path.join(projectRoot, 'installer', 'files', 'erapor-shell.cs');
+		const shellOut = path.resolve(projectRoot, 'dist', 'windows', 'erapor-shell.exe');
+		try {
+			run(cscPath, [
+				'/nologo',
+				'/target:winexe',
+				'/platform:x64',
+				'/langversion:5',
+				'/warn:0',
+				'/win32icon:' + path.join(projectRoot, 'static', 'logo.ico'),
+				'/out:' + shellOut,
+				'/r:System.Drawing.dll',
+				'/r:System.Windows.Forms.dll',
+				'/r:' + interopCore,
+				'/r:' + interopWinForms,
+				shellSource
+			]);
+			fs.copyFileSync(shellOut, path.join(appStage, 'e-Rapor.exe'));
+			// Assembly interop managed (Core/WinForms) harus ada di samping exe:
+			// .NET Framework tidak memuatnya dari folder lain, dan bila hilang
+			// JIT method OnShownAsync melempar FileNotFoundException sebelum shell
+			// sempat menyalakan server (gejala: jendela kosong + dialog error).
+			fs.copyFileSync(interopCore, path.join(appStage, 'Microsoft.Web.WebView2.Core.dll'));
+			fs.copyFileSync(interopWinForms, path.join(appStage, 'Microsoft.Web.WebView2.WinForms.dll'));
+			// Loader native dibutuhkan oleh interop saat runtime (disematkan sebagai
+			// resource di dalam e-Rapor.exe, tapi tetap disertakan di samping exe).
+			if (fs.existsSync(interopLoader)) {
+				fs.copyFileSync(interopLoader, path.join(appStage, 'WebView2Loader.dll'));
+			}
+			console.info('Desktop shell dikompilasi →', path.join(appStage, 'e-Rapor.exe'));
+		} catch (err) {
+			console.warn(
+				'Gagal mengompilasi shell desktop (installer tetap browser-mode):',
+				err && (err.message || err)
+			);
+		}
+	}
+
+	// 14c) Unduh bootstrapper WebView2 Runtime (dipasang installer hanya bila
+	//      mesin target belum punya runtime Edge WebView2). Unt mesin tanpa
+	//      runtime, shell otomatis jatuh ke mode browser.
+	const wv2Bootstrapper = path.resolve(
+		projectRoot,
+		'dist',
+		'windows',
+		'MicrosoftEdgeWebview2Setup.exe'
+	);
+	if (!fs.existsSync(wv2Bootstrapper)) {
+		console.info('Downloading WebView2 Runtime bootstrapper...');
+		try {
+			run('curl', [
+				'-sL',
+				'--max-time',
+				'300',
+				'-o',
+				wv2Bootstrapper,
+				'https://go.microsoft.com/fwlink/?linkid=2124703'
+			]);
+		} catch (err) {
+			console.warn('Gagal mengunduh bootstrapper WebView2:', err && (err.message || err));
 		}
 	}
 

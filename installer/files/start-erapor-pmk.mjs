@@ -153,7 +153,10 @@ async function main() {
 				await fsPromises.copyFile(srcDb, dstDb);
 				await appendLog(LOG_FILE, `Database awal disalin ke ${dstDb}`);
 			} else {
-				await appendLog(LOG_FILE, `Peringatan: file database sumber tidak ditemukan di ${srcDb}`);
+				await appendLog(
+					LOG_FILE,
+					'Tidak ada database awal yang dibundel (normal): aplikasi mulai dengan basis data kosong. Skema dibuat saat instalasi/start, lalu admin menarik data dari Database Pusat lewat halaman Sinkronisasi.'
+				);
 			}
 		}
 	} catch (err) {

@@ -1,9 +1,13 @@
 import db from '$lib/server/db';
 import { isWaliOfKelas, isWaliKelasAccount, ownedKelasIdSet } from '$lib/server/kelas-akses';
 import { tableKelas, tableKokurikuler } from '$lib/server/db/schema';
-import { profilPelajarPancasilaDimensions, type DimensiProfilLulusanKey } from '$lib/statics';
+import {
+	profilPelajarPancasilaDimensions,
+	profilPelajarPancasilaDimensionLabelByKey,
+	type DimensiProfilLulusanKey
+} from '$lib/statics';
 import { fail } from '@sveltejs/kit';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, or, sql } from 'drizzle-orm';
 import { readBufferToAoA } from '$lib/utils/excel.js';
 import { cookieNames } from '$lib/utils';
 
@@ -32,24 +36,89 @@ function isTableMissingError(error: unknown) {
 	);
 }
 
-export async function load({ depends, parent }) {
+export async function load({ depends, parent, url, locals }) {
 	depends('app:kokurikuler');
 	const { kelasAktif } = await parent();
 	const kelasId = kelasAktif?.id ?? null;
+	const sekolahId = locals?.sekolah?.id ?? null;
+
+	const q = url.searchParams.get('q')?.trim() ?? '';
+	const dimensiParam = url.searchParams.get('dimensi')?.trim() ?? '';
 
 	let kokurikulerRaw: Awaited<ReturnType<typeof db.query.tableKokurikuler.findMany>> = [];
 	let tableReady = true;
+	let totalSemua = 0;
+	let totalFiltered = 0;
+	let opsiDimensi: Array<{ value: string; label: string }> = [];
 
 	if (kelasId) {
 		try {
-			kokurikulerRaw = await db.query.tableKokurikuler.findMany({
-				where: eq(tableKokurikuler.kelasId, kelasId),
-				orderBy: asc(tableKokurikuler.createdAt)
-			});
+			const conditions = [eq(tableKokurikuler.kelasId, kelasId)];
+
+			if (q) {
+				const likePattern = `%${q}%`;
+				conditions.push(
+					or(
+						sql`${tableKokurikuler.kode} LIKE ${likePattern} COLLATE NOCASE`,
+						sql`${tableKokurikuler.tujuan} LIKE ${likePattern} COLLATE NOCASE`
+					)!
+				);
+			}
+
+			if (dimensiParam) {
+				conditions.push(
+					sql`EXISTS (SELECT 1 FROM json_each(${tableKokurikuler.dimensi}) WHERE json_each.value = ${dimensiParam})`
+				);
+			}
+
+			const whereCondition = and(...conditions);
+
+			const [[{ countSemua }], [{ countFiltered }], rows, rawDimensiRows] = await Promise.all([
+				db
+					.select({ countSemua: count() })
+					.from(tableKokurikuler)
+					.where(eq(tableKokurikuler.kelasId, kelasId)),
+				db.select({ countFiltered: count() }).from(tableKokurikuler).where(whereCondition),
+				db.query.tableKokurikuler.findMany({
+					where: whereCondition,
+					orderBy: asc(tableKokurikuler.createdAt)
+				}),
+				db
+					.selectDistinct({
+						dimensiKey: sql<string>`json_each.value`
+					})
+					.from(tableKokurikuler)
+					.innerJoin(
+						tableKelas,
+						sekolahId
+							? and(
+									eq(tableKokurikuler.kelasId, tableKelas.id),
+									eq(tableKelas.sekolahId, sekolahId)
+								)
+							: eq(tableKokurikuler.kelasId, tableKelas.id)
+					)
+					.innerJoin(sql`json_each(${tableKokurikuler.dimensi})`, sql`1=1`)
+					.where(eq(tableKokurikuler.kelasId, kelasId))
+					.orderBy(sql`json_each.value ASC`)
+			]);
+
+			kokurikulerRaw = rows;
+			totalSemua = countSemua;
+			totalFiltered = countFiltered;
+			opsiDimensi = rawDimensiRows
+				.map((r) => r.dimensiKey)
+				.filter((k): k is string => Boolean(k))
+				.map((key) => ({
+					value: key,
+					label: profilPelajarPancasilaDimensionLabelByKey[key as DimensiProfilLulusanKey] ?? key
+				}));
 		} catch (error) {
 			if (isTableMissingError(error)) {
 				tableReady = false;
 				kokurikulerRaw = [];
+				totalSemua = 0;
+				totalFiltered = 0;
+				opsiDimensi = [];
 			} else {
 				throw error;
 			}
@@ -59,6 +128,13 @@ export async function load({ depends, parent }) {
 	return {
 		kelasId,
 		tableReady,
+		totalSemua,
+		totalFiltered,
+		opsiDimensi,
+		filters: {
+			q,
+			dimensi: dimensiParam
+		},
 		kokurikuler: kokurikulerRaw.map((item) => ({
 			...item,
 			dimensi: Array.isArray(item.dimensi)

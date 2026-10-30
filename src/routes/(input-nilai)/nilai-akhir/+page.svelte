@@ -4,15 +4,16 @@
 	import { page } from '$app/state';
 	import Icon from '$lib/components/icon.svelte';
 	import { modalRoute, searchQueryMarker } from '$lib/utils';
-	import { onDestroy } from 'svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 	import LegerDownload from '$lib/components/LegerDownload.svelte';
 	import KirimDapodikPage from './kirim-dapodik/+page.svelte';
 	import { isAdminUser } from '../../pengguna/permissions';
 
 	let { data } = $props();
+	const KUNCI_FILTER = ['q'];
 	// svelte-ignore state_referenced_locally
 	let searchTerm = $state(data.page.search ?? '');
-	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const daftarNilai = $derived(data.daftarNilai ?? []);
 	const hasRows = $derived(daftarNilai.length > 0);
@@ -40,61 +41,14 @@
 	});
 
 	$effect(() => {
-		if (searchTimer) return;
 		const latestSearchTerm = data.page.search ?? '';
 		if (searchTerm !== latestSearchTerm) {
 			searchTerm = latestSearchTerm;
 		}
 	});
 
-	function buildSearchUrl(rawValue: string) {
-		const params = new SvelteURLSearchParams(page.url.search);
-		const cleaned = rawValue.trim();
-		const current = params.get('q') ?? '';
-		const searchChanged = cleaned !== current;
-		if (cleaned) {
-			params.set('q', cleaned);
-		} else {
-			params.delete('q');
-		}
-		if (searchChanged) {
-			params.delete('page');
-		}
-		const nextQuery = params.toString();
-		const nextUrl = `${page.url.pathname}${nextQuery ? `?${nextQuery}` : ''}`;
-		const currentUrl = `${page.url.pathname}${page.url.search}`;
-		if (nextUrl === currentUrl) {
-			return null;
-		}
-		return nextUrl;
-	}
-
-	async function applySearch(rawValue: string) {
-		const target = buildSearchUrl(rawValue);
-		if (!target) return;
-		searchTimer = undefined;
-		await goto(target, { replaceState: true, keepFocus: true });
-	}
-
-	function handleSearchInput(event: Event) {
-		const value = (event.currentTarget as HTMLInputElement).value;
-		searchTerm = value;
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = setTimeout(() => {
-			searchTimer = undefined;
-			void applySearch(value);
-		}, 400);
-	}
-
-	function submitSearch(event: Event) {
-		event.preventDefault();
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = undefined;
-		void applySearch(searchTerm);
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
 	}
 
 	function buildPageUrl(pageNumber: number) {
@@ -132,13 +86,6 @@
 			maximumFractionDigits: 2
 		});
 	}
-
-	onDestroy(() => {
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = undefined;
-	});
 </script>
 
 {#if !kelasAktif}
@@ -206,26 +153,16 @@
 		</div>
 	</div>
 
-	<form
-		class="mt-4 flex flex-col gap-2 sm:flex-row"
-		data-sveltekit-keepfocus
-		data-sveltekit-replacestate
-		onsubmit={submitSearch}
-	>
-		<!-- Cari nama murid -->
-		<label class="input bg-base-200 dark:bg-base-300 w-full dark:border-none">
-			<Icon name="search" />
-			<input
-				type="search"
-				name="q"
-				value={searchTerm}
-				spellcheck="false"
-				placeholder="Cari nama murid..."
-				autocomplete="name"
-				oninput={handleSearchInput}
-			/>
-		</label>
-	</form>
+	<div class="mt-4">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder="Cari nama murid..."
+			onSearch={(value) => terapkanFilter('q', value)}
+			aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+			onReset={() =>
+				goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+		/>
+	</div>
 
 	<div
 		class="bg-base-100 dark:bg-base-200 mt-4 overflow-x-auto rounded-md shadow-md dark:shadow-none"

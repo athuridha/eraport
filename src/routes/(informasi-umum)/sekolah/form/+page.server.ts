@@ -258,6 +258,14 @@ export const actions = {
 						updatedAt: new Date().toISOString()
 					})
 					.where(eq(tableSekolah.id, formSekolah.id));
+				// Pastikan pegawai kepala sekolah terikat ke sekolah ini agar muncul
+				// di dropdown relasi (loadOpsiRelasi filter per sekolah).
+				if (resolvedKepalaSekolahId) {
+					await db
+						.update(tablePegawai)
+						.set({ sekolahId: formSekolah.id })
+						.where(eq(tablePegawai.id, resolvedKepalaSekolahId));
+				}
 
 				// Keep the kepala sekolah auth account in sync with the saved pegawai
 				formSekolah.kepalaSekolahId = resolvedKepalaSekolahId;
@@ -301,6 +309,14 @@ export const actions = {
 					.values(formSekolahFinal)
 					.returning({ id: tableSekolah.id });
 				formSekolah.id = newSekolah?.id;
+				// Pegawai kepala sekolah dibuat sebelum baris sekolah ada, jadi
+				// sekolah_id baru bisa diisi setelah insert ini.
+				if (newSekolah?.id && formSekolahFinal.kepalaSekolahId) {
+					await db
+						.update(tablePegawai)
+						.set({ sekolahId: newSekolah.id })
+						.where(eq(tablePegawai.id, formSekolahFinal.kepalaSekolahId));
+				}
 			}
 
 			if (!formSekolah.id) error(409, `Gagal simpan data sekolah`);

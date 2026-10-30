@@ -2,9 +2,10 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import Icon from '$lib/components/icon.svelte';
-	import { onDestroy } from 'svelte';
 	import { showModal } from '$lib/components/global-modal.svelte';
 	import SvelteURLSearchParams from '$lib/svelte-helpers/url-search-params';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 	import PresensiGuruEditModal from '$lib/components/presensi-guru/presensi-guru-edit-modal.svelte';
 	import PresensiGuruDetailBody from '$lib/components/presensi-guru/presensi-guru-detail-body.svelte';
 	import TablePresensiGuruBulanan from '$lib/components/presensi-guru/table-presensi-guru-bulanan.svelte';
@@ -57,6 +58,8 @@
 	};
 
 	let { data }: { data: PageData } = $props();
+
+	const KUNCI_FILTER = ['q', 'tanggal'];
 
 	const STATUS_META: Record<string, { label: string; class: string }> = {
 		hadir: { label: 'Hadir', class: 'badge-success' },
@@ -192,65 +195,17 @@
 
 	// svelte-ignore state_referenced_locally
 	let searchTerm = $state(data.page.search ?? '');
-	let searchTimer: ReturnType<typeof setTimeout> | undefined;
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
 
 	$effect(() => {
-		if (searchTimer) return;
 		const latestSearchTerm = data.page.search ?? '';
 		if (searchTerm !== latestSearchTerm) {
 			searchTerm = latestSearchTerm;
 		}
 	});
-
-	function buildSearchUrl(rawValue: string) {
-		const params = new SvelteURLSearchParams(page.url.search);
-		const cleaned = rawValue.trim();
-		const current = params.get('q') ?? '';
-		const searchChanged = cleaned !== current;
-		if (cleaned) {
-			params.set('q', cleaned);
-		} else {
-			params.delete('q');
-		}
-		if (searchChanged) {
-			params.delete('page');
-		}
-		const nextQuery = params.toString();
-		const nextUrl = `${page.url.pathname}${nextQuery ? `?${nextQuery}` : ''}`;
-		const currentUrl = `${page.url.pathname}${page.url.search}`;
-		if (nextUrl === currentUrl) {
-			return null;
-		}
-		return nextUrl;
-	}
-
-	async function applySearch(rawValue: string) {
-		const target = buildSearchUrl(rawValue);
-		if (!target) return;
-		searchTimer = undefined;
-		await goto(target, { replaceState: true, keepFocus: true });
-	}
-
-	function handleSearchInput(event: Event) {
-		const value = (event.currentTarget as HTMLInputElement).value;
-		searchTerm = value;
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = setTimeout(() => {
-			searchTimer = undefined;
-			void applySearch(value);
-		}, 400);
-	}
-
-	function submitSearch(event: Event) {
-		event.preventDefault();
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = undefined;
-		void applySearch(searchTerm);
-	}
 
 	function buildPageUrl(pageNumber: number) {
 		const params = new SvelteURLSearchParams(page.url.search);
@@ -323,13 +278,6 @@
 			onNeutral: { label: 'Tutup' }
 		});
 	}
-
-	onDestroy(() => {
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = undefined;
-	});
 </script>
 
 <div class="card bg-base-100 rounded-lg border border-none p-4 shadow-md">
@@ -371,78 +319,65 @@
 			</div>
 		</div>
 
-		<div class="mb-4 flex items-start justify-between gap-2 max-sm:flex-col sm:flex-row">
-			<div class="flex flex-wrap items-center gap-2 max-sm:w-full">
-				<div class="join flex max-sm:w-full">
-					{#if data.mode === 'bulanan'}
-						<div class="min-w-0 flex-1">
-							<select
-								class="select bg-base-200 dark:bg-base-300 w-full truncate rounded-r-none max-sm:w-full dark:border-none"
-								bind:value={selectedBulan}
-							>
-								{#each bulanList as nama, i (nama)}
-									<option value={i + 1}>{nama}</option>
-								{/each}
-							</select>
-						</div>
-						<input
-							type="number"
-							class="input bg-base-200 dark:bg-base-300 w-24 rounded-none max-sm:flex-1 dark:border-none"
-							bind:value={selectedTahun}
-							min="2000"
-							max="2099"
-						/>
-					{:else}
-						<input
-							type="date"
-							class="input bg-base-200 dark:bg-base-300 w-full rounded-r-none max-sm:w-full dark:border-none"
-							bind:value={selectedTanggal}
-						/>
-					{/if}
-					<button
-						type="button"
-						class="btn btn-soft rounded-none shadow-none"
-						aria-label="Lihat presensi"
-						title="Lihat presensi"
-						onclick={viewDate}
-					>
-						<Icon name="eye" />
-					</button>
-					<button
-						type="button"
-						class="btn btn-soft rounded-l-none shadow-none"
-						aria-label={data.mode === 'bulanan' ? 'Kembali ke bulan ini' : 'Kembali ke hari ini'}
-						title={data.mode === 'bulanan' ? 'Kembali ke bulan ini' : 'Kembali ke hari ini'}
-						onclick={data.mode === 'bulanan' ? resetToCurrentBulan : resetToToday}
-						disabled={data.mode === 'bulanan' ? isCurrentBulan : isToday}
-					>
-						<Icon name="repeat" />
-					</button>
-				</div>
-			</div>
-
-			<form
-				class="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row max-sm:w-full"
-				data-sveltekit-keepfocus
-				data-sveltekit-replacestate
-				autocomplete="off"
-				spellcheck="false"
-				onsubmit={submitSearch}
+		<div class="mb-4 flex flex-col gap-2 sm:flex-row">
+			<FilterToolbar
+				bind:q={searchTerm}
+				qPlaceholder="Cari nama guru..."
+				onSearch={(value) => terapkanFilter('q', value)}
+				aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+				onReset={() =>
+					goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
 			>
-				<div class="join w-full min-w-0">
-					<label class="input bg-base-200 dark:bg-base-300 join-item min-w-0 grow dark:border-none">
-						<Icon name="search" />
-						<input
-							type="search"
-							name="q"
-							value={searchTerm}
-							placeholder="Cari nama guru..."
-							oninput={handleSearchInput}
-							autocomplete="off"
-						/>
-					</label>
+				<div class="flex flex-wrap items-center gap-2 max-sm:w-full">
+					<div class="join flex max-sm:w-full">
+						{#if data.mode === 'bulanan'}
+							<div class="min-w-0 flex-1">
+								<select
+									class="select bg-base-200 dark:bg-base-300 w-full truncate rounded-r-none max-sm:w-full dark:border-none"
+									bind:value={selectedBulan}
+								>
+									{#each bulanList as nama, i (nama)}
+										<option value={i + 1}>{nama}</option>
+									{/each}
+								</select>
+							</div>
+							<input
+								type="number"
+								class="input bg-base-200 dark:bg-base-300 w-24 rounded-none max-sm:flex-1 dark:border-none"
+								bind:value={selectedTahun}
+								min="2000"
+								max="2099"
+							/>
+						{:else}
+							<input
+								type="date"
+								class="input bg-base-200 dark:bg-base-300 w-full rounded-r-none max-sm:w-full dark:border-none"
+								bind:value={selectedTanggal}
+							/>
+						{/if}
+						<button
+							type="button"
+							class="btn btn-soft rounded-none shadow-none"
+							aria-label="Lihat presensi"
+							title="Lihat presensi"
+							onclick={viewDate}
+						>
+							<Icon name="eye" />
+						</button>
+						<button
+							type="button"
+							class="btn btn-soft rounded-l-none shadow-none"
+							aria-label={data.mode === 'bulanan' ? 'Kembali ke bulan ini' : 'Kembali ke hari ini'}
+							title={data.mode === 'bulanan' ? 'Kembali ke bulan ini' : 'Kembali ke hari ini'}
+							onclick={data.mode === 'bulanan' ? resetToCurrentBulan : resetToToday}
+							disabled={data.mode === 'bulanan' ? isCurrentBulan : isToday}
+						>
+							<Icon name="repeat" />
+						</button>
+					</div>
+
 					<select
-						class="select bg-base-200 dark:bg-base-300 join-item w-auto shrink truncate dark:border-none"
+						class="select bg-base-200 dark:bg-base-300 w-auto shrink truncate dark:border-none"
 						value={selectedMode}
 						title="Pilih mode presensi"
 						onchange={(e) => {
@@ -454,7 +389,7 @@
 						<option value="bulanan">Bulanan</option>
 					</select>
 				</div>
-			</form>
+			</FilterToolbar>
 		</div>
 
 		{#if data.guruCount === 0}

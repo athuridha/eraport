@@ -234,8 +234,11 @@
 	function loader(form: HTMLFormElement) {
 		if (init) {
 			populateForm(form, flatten(init));
-			invalid = !form.checkValidity();
 		}
+		// Hitung ulang walau tanpa `init`: modal yang baru dibuka dengan field sudah
+		// valid tidak boleh menyimpan keadaan `invalid = true` awal — tombol Simpan
+		// tetap mati sampai ada event input/change pertama.
+		invalid = !form.checkValidity();
 	}
 
 	$effect(() => {

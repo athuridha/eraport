@@ -3,8 +3,9 @@
 	import { page } from '$app/state';
 	import Icon from '$lib/components/icon.svelte';
 	import NilaiModal from '$lib/components/asesmen-kokurikuler/nilai-modal.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 	import { searchQueryMarker } from '$lib/utils';
-	import { onDestroy } from 'svelte';
 	import type { DimensiProfilLulusanKey } from '$lib/statics';
 	import type { NilaiKategori } from '$lib/kokurikuler';
 	import { toast } from '$lib/components/toast.svelte';
@@ -58,9 +59,6 @@
 
 	const hasKokurikuler = $derived.by(() => data.kokurikulerList.length > 0);
 	const selectedKokurikuler = $derived.by(() => data.selectedKokurikuler);
-	const selectedKokurikulerLabel = $derived.by(() =>
-		selectedKokurikuler ? capitalizeSentence(selectedKokurikuler.tujuan) : null
-	);
 	const selectedKokurikulerHasDimensi = $derived.by(() =>
 		selectedKokurikuler ? selectedKokurikuler.dimensi.length > 0 : false
 	);
@@ -78,13 +76,14 @@
 	const totalPages = $derived.by(() => Math.max(1, data.page?.totalPages ?? 1));
 	const pages = $derived.by(() => Array.from({ length: totalPages }, (_, index) => index + 1));
 
+	const KUNCI_FILTER = ['q', 'kokurikuler_id'];
+
 	// svelte-ignore state_referenced_locally
 	let selectedKokurikulerValue = $state(
 		data.selectedKokurikulerId ? String(data.selectedKokurikulerId) : ''
 	);
 	// svelte-ignore state_referenced_locally
 	let searchTerm = $state(data.search ?? '');
-	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 	let modalOpen = $state(false);
 	let activeMurid = $state<MuridRow | null>(null);
@@ -96,80 +95,17 @@
 		searchTerm = data.search ?? '';
 	});
 
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
+
 	$effect(() => {
 		if (!hasKokurikuler) return;
 		if (data.kokurikulerList.length !== 1) return;
 		const onlyId = String(data.kokurikulerList[0].id);
 		if (selectedKokurikulerValue === onlyId) return;
 		selectedKokurikulerValue = onlyId;
-		handleKokurikulerChange(onlyId);
-	});
-
-	import SvelteURLSearchParams from '$lib/svelte-helpers/url-search-params';
-
-	function buildUrl(updateParams: (params: SvelteURLSearchParams) => void) {
-		const params = new SvelteURLSearchParams(page.url.search);
-		updateParams(params);
-		const nextQuery = params.toString();
-		const nextUrl = `${page.url.pathname}${nextQuery ? `?${nextQuery}` : ''}`;
-		const currentUrl = `${page.url.pathname}${page.url.search}`;
-		return nextUrl === currentUrl ? null : nextUrl;
-	}
-
-	async function applyNavigation(updateParams: (params: SvelteURLSearchParams) => void) {
-		const target = buildUrl(updateParams);
-		if (!target) return;
-
-		await goto(target, { replaceState: true, keepFocus: true });
-	}
-
-	function handleKokurikulerChange(value: string) {
-		void applyNavigation((params) => {
-			if (value) {
-				params.set('kokurikuler_id', value);
-			} else {
-				params.delete('kokurikuler_id');
-			}
-			params.delete('page');
-		});
-	}
-
-	async function applySearch(value: string) {
-		await applyNavigation((params) => {
-			const cleaned = value.trim();
-			if (cleaned) {
-				params.set('q', cleaned);
-			} else {
-				params.delete('q');
-			}
-			params.delete('page');
-		});
-	}
-
-	function handleSearchInput(event: Event) {
-		const value = (event.currentTarget as HTMLInputElement).value;
-		searchTerm = value;
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = setTimeout(() => {
-			void applySearch(value);
-		}, 400);
-	}
-
-	function submitSearch(event: Event) {
-		event.preventDefault();
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-			searchTimer = undefined;
-		}
-		void applySearch(searchTerm);
-	}
-
-	onDestroy(() => {
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
+		void terapkanFilter('kokurikuler_id', onlyId);
 	});
 
 	function openModalFor(murid: MuridRow) {
@@ -266,12 +202,9 @@
 
 	function gotoPage(pageNumber: number) {
 		const sanitized = pageNumber < 1 ? 1 : pageNumber;
-		void applyNavigation((params) => {
-			if (sanitized <= 1) {
-				params.delete('page');
-			} else {
-				params.set('page', String(sanitized));
-			}
+		void goto(setFilter(page.url, 'page', sanitized <= 1 ? '' : String(sanitized)), {
+			replaceState: true,
+			keepFocus: true
 		});
 	}
 
@@ -312,50 +245,30 @@
 		onImport={openImportModal}
 	/>
 
-	<div class="flex flex-col items-center gap-2 sm:flex-row">
-		<label class="w-full md:max-w-80">
-			<span class="sr-only">Pilih kokurikuler</span>
-			<select
-				class="select bg-base-200 w-full truncate dark:border-none"
-				title={!canEdit
-					? 'Anda tidak memiliki izin untuk mengubah'
-					: (selectedKokurikulerLabel ?? 'Pilih kokurikuler')}
-				bind:value={selectedKokurikulerValue}
-				onchange={(event) =>
-					handleKokurikulerChange((event.currentTarget as HTMLSelectElement).value)}
-				disabled={!hasKokurikuler || !canEdit}
-			>
-				{#if !hasKokurikuler}
-					<option value="">Belum ada kokurikuler</option>
-				{:else}
-					<option value="" disabled selected={selectedKokurikulerValue === ''}>
-						Pilih Kokurikuler
-					</option>
-					{#each data.kokurikulerList as item (item.id)}
-						<option value={String(item.id)}>{capitalizeSentence(item.tujuan)}</option>
-					{/each}
-				{/if}
-			</select>
-		</label>
-		<form
-			class="w-full"
-			data-sveltekit-keepfocus
-			data-sveltekit-replacestate
-			autocomplete="off"
-			onsubmit={submitSearch}
-		>
-			<label class="input bg-base-200 dark:bg-base-300 w-full dark:border-none">
-				<Icon name="search" />
-				<input
-					type="search"
-					name="q"
-					value={searchTerm}
-					autocomplete="name"
-					placeholder="Cari nama murid..."
-					oninput={handleSearchInput}
-				/>
-			</label>
-		</form>
+	<div class="mb-4 flex flex-col gap-2 sm:flex-row">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder="Cari nama murid..."
+			onSearch={(value) => terapkanFilter('q', value)}
+			pilih={[
+				{
+					name: 'kokurikuler_id',
+					label: 'Kegiatan',
+					value: data.selectedKokurikulerId ? String(data.selectedKokurikulerId) : '',
+					opsis: [
+						{ value: '', label: 'Semua Kegiatan' },
+						...data.kokurikulerList.map((item) => ({
+							value: String(item.id),
+							label: capitalizeSentence(item.tujuan)
+						}))
+					],
+					onChange: (v) => terapkanFilter('kokurikuler_id', v)
+				}
+			]}
+			aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+			onReset={() =>
+				goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+		/>
 	</div>
 
 	{#if !hasKokurikuler}

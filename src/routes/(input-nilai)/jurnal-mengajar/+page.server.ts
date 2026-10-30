@@ -8,7 +8,7 @@ import {
 	tableTujuanPembelajaran
 } from '$lib/server/db/schema';
 import { fail, redirect } from '@sveltejs/kit';
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { buildKelasContext } from '$lib/server/route-utils';
 import { agamaMapelNames } from '$lib/statics';
 import { getAksesMapelUser } from '$lib/server/mapel-access';
@@ -45,6 +45,8 @@ export async function load({ locals, url, depends, parent }) {
 	const today = new Date().toISOString().split('T')[0];
 	const tanggal = tanggalParam && isValidDate(tanggalParam) ? tanggalParam : today;
 
+	const q = url.searchParams.get('q')?.trim() ?? '';
+
 	const requestedPage = Number(url.searchParams.get('page')) || 1;
 	const pageNumber =
 		Number.isFinite(requestedPage) && requestedPage > 0 ? Math.floor(requestedPage) : 1;
@@ -60,6 +62,8 @@ export async function load({ locals, url, depends, parent }) {
 			hasAnyMapel: false,
 			mapelId: null,
 			tanggal: null,
+			q: '',
+			kosongKarenaFilter: false,
 			page: {
 				kelasId,
 				currentPage: 1,
@@ -282,20 +286,43 @@ export async function load({ locals, url, depends, parent }) {
 	const lingkupMateriList = Array.from(lingkupMateriSet).sort();
 
 	// Count total journals
-	const countFilter = and(
+	const baseFilter = and(
 		eq(tableJurnalMengajar.authUserId, user?.id ?? 0),
-		tanggal ? eq(tableJurnalMengajar.tanggal, tanggal) : undefined,
 		kelasIdNum
 			? eq(tableJurnalMengajar.kelasId, kelasIdNum)
 			: inArray(tableJurnalMengajar.kelasId, kelasIds)
 	);
 
-	const [{ totalItems }] = await db
-		.select({ totalItems: sql<number>`count(*)` })
-		.from(tableJurnalMengajar)
-		.where(countFilter);
+	const qCondition = q
+		? or(
+				like(tableJurnalMengajar.lingkupMateri, `%${q}%`),
+				like(tableJurnalMengajar.catatan, `%${q}%`)
+			)
+		: undefined;
+
+	const countFilter = and(
+		baseFilter,
+		tanggal ? eq(tableJurnalMengajar.tanggal, tanggal) : undefined,
+		qCondition
+	);
+
+	const [[{ totalItems }], [{ totalAll }]] = await Promise.all([
+		db
+			.select({ totalItems: sql<number>`count(*)` })
+			.from(tableJurnalMengajar)
+			.where(countFilter),
+		db
+			.select({ totalAll: sql<number>`count(*)` })
+			.from(tableJurnalMengajar)
+			.where(baseFilter)
+	]);
 
 	const total = totalItems ?? 0;
+	const totalSemua = totalAll ?? 0;
+	const hasFilter = Boolean(
+		q || url.searchParams.get('tanggal') || url.searchParams.get('mapel_id')
+	);
+	const kosongKarenaFilter = totalSemua > 0 && total === 0 && hasFilter;
 	const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
 	const currentPage = Math.min(Math.max(pageNumber, 1), totalPages);
 	const offset = (currentPage - 1) * PER_PAGE;
@@ -364,6 +391,8 @@ export async function load({ locals, url, depends, parent }) {
 		hasAnyMapel,
 		mapelId,
 		tanggal,
+		q,
+		kosongKarenaFilter,
 		userType,
 		page: {
 			kelasId,

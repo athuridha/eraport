@@ -1,7 +1,9 @@
 <script lang="ts">
-	import { invalidate } from '$app/navigation';
+	import { goto, invalidate } from '$app/navigation';
 	import { page } from '$app/state';
 	import Icon from '$lib/components/icon.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 	import KokurikulerFormModal from '$lib/components/kokurikuler/form-modal.svelte';
 	import KokurikulerDeleteModal from '$lib/components/kokurikuler/delete-modal.svelte';
 	import ImportKokurikulerDialog from '$lib/components/kokurikuler/import-kokurikuler-dialog.svelte';
@@ -21,8 +23,30 @@
 			kokurikuler: Array<Kokurikuler & { dimensi: DimensiProfilLulusanKey[] }>;
 			dimensiPilihan: typeof profilPelajarPancasilaDimensions;
 			tableReady: boolean;
+			totalSemua?: number;
+			opsiDimensi?: Array<{ value: string; label: string }>;
+			filters?: {
+				q: string;
+				dimensi: string;
+			};
 		};
 	} = $props();
+
+	const KUNCI_FILTER = ['q', 'dimensi'];
+
+	// svelte-ignore state_referenced_locally
+	let searchTerm = $state(data.filters?.q ?? '');
+
+	$effect(() => {
+		const latestSearchTerm = data.filters?.q ?? '';
+		if (searchTerm !== latestSearchTerm) {
+			searchTerm = latestSearchTerm;
+		}
+	});
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
 
 	let selectedIds = $state<number[]>([]);
 	let selectedDimensions = $state<DimensiProfilLulusanKey[]>([]);
@@ -383,6 +407,28 @@
 		</div>
 	{/if}
 
+	{#if data.kelasId && data.tableReady}
+		<div class="mt-4 flex flex-col gap-2 sm:flex-row">
+			<FilterToolbar
+				bind:q={searchTerm}
+				qPlaceholder="Cari kode atau kegiatan..."
+				onSearch={(value) => terapkanFilter('q', value)}
+				pilih={[
+					{
+						name: 'dimensi',
+						label: 'Dimensi DPL',
+						value: data.filters?.dimensi ?? page.url.searchParams.get('dimensi') ?? '',
+						opsis: [{ value: '', label: 'Semua Dimensi' }, ...(data.opsiDimensi ?? [])],
+						onChange: (v) => terapkanFilter('dimensi', v)
+					}
+				]}
+				aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+				onReset={() =>
+					goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+			/>
+		</div>
+	{/if}
+
 	<div
 		class="bg-base-100 dark:bg-base-200 mt-4 overflow-x-auto rounded-md shadow-md dark:shadow-none"
 	>
@@ -456,7 +502,11 @@
 				{:else}
 					<tr>
 						<td class="py-6 text-center italic opacity-60" colspan="6">
-							Belum ada data kokurikuler
+							{#if (data.totalSemua ?? 0) === 0}
+								Belum ada data kokurikuler
+							{:else}
+								Tidak ada yang cocok dengan filter
+							{/if}
 						</td>
 					</tr>
 				{/each}

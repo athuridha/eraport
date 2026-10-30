@@ -9,8 +9,8 @@ import {
 	tableAuthUserMataPelajaran,
 	tableDapodikPembelajaran
 } from '$lib/server/db/schema';
-import { agamaVariantNames, pksVariantNames } from '$lib/statics';
-import { and, eq, inArray } from 'drizzle-orm';
+import { agamaVariantNames, jenisMapel, pksVariantNames } from '$lib/statics';
+import { and, count, eq, inArray, like, or } from 'drizzle-orm';
 
 type MataPelajaranBase = Omit<MataPelajaran, 'tujuanPembelajaran'>;
 type MataPelajaranWithTp = MataPelajaranBase & {
@@ -103,11 +103,62 @@ export async function load({ depends, url, parent }) {
 			? kelasCandidate
 			: null;
 
+	const q = (url.searchParams.get('q') ?? '').trim();
+	const jenisParam = (url.searchParams.get('jenis') ?? '').trim();
+
+	const baseConditions = kelasId ? [eq(tableMataPelajaran.kelasId, kelasId)] : [];
+	const filterConditions = [...baseConditions];
+
+	if (q) {
+		const searchPattern = `%${q}%`;
+		filterConditions.push(
+			or(
+				like(tableMataPelajaran.nama, searchPattern),
+				like(tableMataPelajaran.kode, searchPattern)
+			)!
+		);
+	}
+
+	if (jenisParam) {
+		filterConditions.push(
+			eq(
+				tableMataPelajaran.jenis,
+				jenisParam as (typeof tableMataPelajaran.jenis.enumValues)[number]
+			)
+		);
+	}
+
 	let mapel = kelasId
 		? await db.query.tableMataPelajaran.findMany({
-				where: eq(tableMataPelajaran.kelasId, kelasId)
+				where: and(...filterConditions)
 			})
 		: [];
+
+	const [[{ totalSemua }], [{ totalFiltered }], distinctJenisRows] =
+		kelasId && baseConditions.length > 0
+			? await Promise.all([
+					db
+						.select({ totalSemua: count() })
+						.from(tableMataPelajaran)
+						.where(and(...baseConditions)),
+					db
+						.select({ totalFiltered: count() })
+						.from(tableMataPelajaran)
+						.where(and(...filterConditions)),
+					db
+						.selectDistinct({ jenis: tableMataPelajaran.jenis })
+						.from(tableMataPelajaran)
+						.where(and(...baseConditions))
+				])
+			: [[{ totalSemua: 0 }], [{ totalFiltered: 0 }], []];
+
+	const opsiJenis: { value: string; label: string }[] = distinctJenisRows
+		.map((r) => r.jenis)
+		.filter((j) => Boolean(j))
+		.map((j) => ({
+			value: j,
+			label: (jenisMapel as Record<string, string>)[j] ?? j
+		}));
 
 	// If the current user is a 'user' role OR a 'wali_kelas' accessing a non-owned kelas,
 	// filter to show only assigned mata pelajaran (ID, nama lintas kelas,
@@ -321,7 +372,12 @@ export async function load({ depends, url, parent }) {
 	return {
 		kelasId,
 		mapel: { daftarMapel },
-		adaDataDapodik
+		adaDataDapodik,
+		q,
+		jenis: jenisParam,
+		opsiJenis,
+		totalSemua,
+		totalFiltered
 	};
 }
 

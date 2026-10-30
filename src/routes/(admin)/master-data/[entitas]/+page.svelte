@@ -8,13 +8,20 @@
 	import PindahMuridModal from '$lib/components/murid/pindah-murid-modal.svelte';
 	import AnggotaEkstrakurikulerModal from '$lib/components/ekstrakurikuler/anggota-modal.svelte';
 	import { selectAll, semuaTerpilih, toggleId } from '$lib/utils/bulk-select';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 
 	let { data } = $props();
+
+	const KUNCI_FILTER = ['q'];
 
 	// svelte-ignore state_referenced_locally
 	let searchTerm = $state(data.filter?.q ?? '');
 	let formTerbuka = $state(false);
 	let bulkTerbuka = $state(false);
+	let ubahKelasTerbuka = $state(false);
+	let kelasTerpilihUbah = $state<number[]>([]);
+	let modeUbah = $state<'tambah' | 'ganti'>('tambah');
 	let pindahMuridTerbuka = $state(false);
 	let anggotaEkstra = $state<{ id: number; nama: string } | null>(null);
 	let kelasTerpilihMassal = $state<number[]>([]);
@@ -70,13 +77,8 @@
 		barisEdit = null;
 	}
 
-	async function applySearch(value: string) {
-		const params = new URLSearchParams(page.url.search);
-		if (value.trim()) params.set('q', value.trim());
-		else params.delete('q');
-		params.delete('page');
-		const query = params.toString();
-		await goto(`${page.url.pathname}${query ? `?${query}` : ''}`, { keepFocus: true });
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
 	}
 
 	async function gotoPage(pageNumber: number) {
@@ -96,6 +98,22 @@
 		kelasTerpilihMassal = checked
 			? [...new Set([...kelasTerpilihMassal, id])]
 			: kelasTerpilihMassal.filter((value) => value !== id);
+	}
+
+	function bukaUbahKelas() {
+		kelasTerpilihUbah = [];
+		modeUbah = 'tambah';
+		ubahKelasTerbuka = true;
+	}
+
+	async function handleUbahKelas({ data: hasil }: { data?: Record<string, unknown> }) {
+		await invalidate('app:master-data');
+		ubahKelasTerbuka = false;
+		terpilih = [];
+		toast({
+			message: typeof hasil?.message === 'string' ? hasil.message : 'Kelas diperbarui',
+			type: 'success'
+		});
 	}
 
 	async function handleSimpan({ data: hasil }: { data?: Record<string, unknown> }) {
@@ -130,6 +148,12 @@
 		{#if entitas}
 			<div class="flex flex-wrap items-center gap-2 max-sm:w-full">
 				{#if terpilih.length}
+					{#if entitas.key === 'mata_pelajaran'}
+						<button type="button" class="btn btn-soft shadow-none" onclick={bukaUbahKelas}>
+							<Icon name="move" />
+							Ubah Kelas {terpilih.length} Terpilih
+						</button>
+					{/if}
 					<FormEnhance action="?/hapusMassal" showToast={false} onsuccess={handleHapus}>
 						{#snippet children({ submitting })}
 							<input type="hidden" name="ids" value={JSON.stringify(terpilih)} />
@@ -189,27 +213,17 @@
 		{/if}
 	</div>
 
-	<form
-		class="mb-4 flex flex-col gap-2 sm:flex-row"
-		data-sveltekit-keepfocus
-		data-sveltekit-replacestate
-		onsubmit={(event) => event.preventDefault()}
-	>
-		<div class="join w-full">
-			<label class="input bg-base-200 dark:bg-base-300 join-item grow dark:border-none">
-				<Icon name="search" />
-				<input
-					type="search"
-					name="q"
-					bind:value={searchTerm}
-					spellcheck="false"
-					placeholder={`Cari ${entitas?.judul.toLowerCase() ?? 'data'}...`}
-					autocomplete="off"
-					onchange={(event) => applySearch((event.currentTarget as HTMLInputElement).value)}
-				/>
-			</label>
+	<div class="mb-4 flex flex-col gap-2 sm:flex-row">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder={`Cari ${entitas?.judul.toLowerCase() ?? 'data'}...`}
+			onSearch={(value) => terapkanFilter('q', value)}
+			aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+			onReset={() =>
+				goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+		>
 			<select
-				class="select bg-base-200 dark:bg-base-300 join-item w-auto shrink dark:border-none"
+				class="select bg-base-200 dark:bg-base-300 w-auto shrink dark:border-none"
 				value={perHalaman}
 				title="Baris per halaman"
 				onchange={(event) =>
@@ -219,8 +233,8 @@
 					<option value={jumlah}>{jumlah} / hal</option>
 				{/each}
 			</select>
-		</div>
-	</form>
+		</FilterToolbar>
+	</div>
 
 	<div class="bg-base-100 dark:bg-base-200 overflow-x-auto rounded-md shadow-md dark:shadow-none">
 		<table class="border-base-200 table border dark:border-none">
@@ -329,7 +343,11 @@
 				{:else}
 					<tr>
 						<td class="p-6 text-center" colspan={(entitas?.kolom.length ?? 0) + 2}>
-							<em class="opacity-60">Belum ada data untuk ditampilkan.</em>
+							<em class="opacity-60">
+								{data.filter.q
+									? 'Tidak ada data yang cocok dengan pencarian.'
+									: 'Belum ada data untuk ditampilkan.'}
+							</em>
 						</td>
 					</tr>
 				{/each}
@@ -700,6 +718,8 @@
 								>
 									<input
 										type="checkbox"
+										name="kelas_ids"
+										value={opsi.value}
 										class="checkbox checkbox-primary checkbox-sm rounded-md"
 										checked={kelasTerpilihMassal.includes(opsi.value)}
 										onchange={(event) =>
@@ -742,6 +762,183 @@
 		</div>
 		<form method="dialog" class="modal-backdrop">
 			<button>close</button>
+		</form>
+	</dialog>
+{/if}
+
+{#if entitas && entitas.key === 'mata_pelajaran'}
+	{@const daftarKelasUbah = relasi.kelas ?? []}
+	<dialog class="modal" class:modal-open={ubahKelasTerbuka} open={ubahKelasTerbuka}>
+		<div class="modal-box max-w-3xl">
+			<h3 class="mb-1 text-lg font-bold">Ubah Kelas {terpilih.length} Mata Pelajaran</h3>
+			<p class="mb-4 text-sm opacity-70">
+				Pilih tindakan pemindahan atau penambahan kelas untuk mata pelajaran yang dipilih.
+			</p>
+
+			<FormEnhance action="?/ubahKelasMassal" showToast={false} onsuccess={handleUbahKelas}>
+				{#snippet children({ submitting, invalid })}
+					<input type="hidden" name="ids" value={JSON.stringify(terpilih)} />
+
+					<div class="space-y-4">
+						<fieldset class="fieldset bg-base-200/50 rounded-box border-base-300 border p-3">
+							<legend class="fieldset-legend text-sm font-semibold">Mode Perubahan</legend>
+							<div class="space-y-2">
+								<label
+									class="hover:bg-base-200/60 flex cursor-pointer items-start gap-3 rounded-lg p-2"
+								>
+									<input
+										type="radio"
+										name="mode"
+										value="tambah"
+										class="radio radio-primary radio-sm mt-0.5"
+										bind:group={modeUbah}
+										disabled={submitting}
+									/>
+									<div>
+										<span class="block text-sm font-medium">Tambahkan ke kelas terpilih</span>
+										<span class="text-base-content/70 block text-xs"
+											>Mapel yang dipilih juga tampil di kelas baru; kelas lama tetap ada.</span
+										>
+									</div>
+								</label>
+								<label
+									class="hover:bg-base-200/60 flex cursor-pointer items-start gap-3 rounded-lg p-2"
+								>
+									<input
+										type="radio"
+										name="mode"
+										value="ganti"
+										class="radio radio-primary radio-sm mt-0.5"
+										bind:group={modeUbah}
+										disabled={submitting}
+									/>
+									<div>
+										<span class="block text-sm font-medium">Ganti menjadi kelas terpilih</span>
+										<span class="text-base-content/70 block text-xs"
+											>Mapel dipindahkan hanya ke kelas terpilih; kelas lain dikosongkan (yang sudah
+											punya nilai tidak dihapus).</span
+										>
+									</div>
+								</label>
+							</div>
+						</fieldset>
+
+						<div
+							class="border-base-300 dark:border-base-200 bg-base-200/50 space-y-2 rounded-xl border p-3"
+						>
+							<div class="flex items-center justify-between border-b pb-2">
+								<label class="flex cursor-pointer items-center gap-2 text-xs font-semibold">
+									<input
+										type="checkbox"
+										class="checkbox checkbox-xs checkbox-primary"
+										checked={daftarKelasUbah.length > 0 &&
+											kelasTerpilihUbah.length === daftarKelasUbah.length}
+										onchange={(e) => {
+											if ((e.currentTarget as HTMLInputElement).checked) {
+												kelasTerpilihUbah = daftarKelasUbah.map((k) => Number(k.value));
+											} else {
+												kelasTerpilihUbah = [];
+											}
+										}}
+										disabled={submitting}
+									/>
+									<span>Pilih Semua Kelas ({daftarKelasUbah.length} kelas)</span>
+								</label>
+								<div class="flex items-center gap-1.5">
+									<button
+										type="button"
+										class="btn btn-ghost btn-xs text-primary text-xs"
+										onclick={() =>
+											(kelasTerpilihUbah = daftarKelasUbah.map((k) => Number(k.value)))}
+										disabled={submitting}
+									>
+										Pilih Semua
+									</button>
+									<span class="opacity-30">•</span>
+									<button
+										type="button"
+										class="btn btn-ghost btn-xs text-xs text-error"
+										onclick={() => (kelasTerpilihUbah = [])}
+										disabled={submitting}
+									>
+										Kosongkan
+									</button>
+								</div>
+							</div>
+
+							<div
+								class="border-base-300 bg-base-100 grid max-h-48 grid-cols-2 gap-1.5 overflow-y-auto rounded-lg border p-2 sm:grid-cols-4"
+							>
+								{#each daftarKelasUbah as opsi (opsi.value)}
+									<label
+										class="hover:bg-base-200 flex cursor-pointer items-center gap-1.5 rounded p-1 text-xs"
+									>
+										<input
+											type="checkbox"
+											name="kelas_ids"
+											value={opsi.value}
+											class="checkbox checkbox-xs"
+											checked={kelasTerpilihUbah.includes(Number(opsi.value))}
+											onchange={(e) => {
+												const val = Number(opsi.value);
+												if ((e.currentTarget as HTMLInputElement).checked) {
+													kelasTerpilihUbah = [...kelasTerpilihUbah, val];
+												} else {
+													kelasTerpilihUbah = kelasTerpilihUbah.filter((id) => id !== val);
+												}
+											}}
+											disabled={submitting}
+										/>
+										<span class="truncate">{opsi.label}</span>
+									</label>
+								{/each}
+							</div>
+							<div class="flex items-center justify-between text-xs opacity-70">
+								<span>
+									Terpilih: <strong>{kelasTerpilihUbah.length}</strong> dari {daftarKelasUbah.length}
+									kelas
+								</span>
+								{#if daftarKelasUbah.length > 0 && kelasTerpilihUbah.length === daftarKelasUbah.length}
+									<span class="badge badge-success badge-xs font-semibold"
+										>Semua Kelas Terpilih</span
+									>
+								{:else if kelasTerpilihUbah.length === 0}
+									<span class="badge badge-error badge-xs font-semibold"
+										>Wajib pilih minimal 1 kelas</span
+									>
+								{/if}
+							</div>
+						</div>
+					</div>
+
+					<div class="modal-action">
+						<button
+							type="button"
+							class="btn btn-ghost rounded-xl"
+							onclick={() => (ubahKelasTerbuka = false)}
+							disabled={submitting}
+						>
+							<Icon name="close" />
+							Batal
+						</button>
+						<button
+							type="submit"
+							class="btn btn-primary btn-soft rounded-xl shadow-none"
+							disabled={submitting || invalid || kelasTerpilihUbah.length === 0}
+						>
+							{#if submitting}
+								<span class="loading loading-spinner loading-sm"></span>
+							{:else}
+								<Icon name="save" />
+							{/if}
+							Simpan Perubahan
+						</button>
+					</div>
+				{/snippet}
+			</FormEnhance>
+		</div>
+		<form method="dialog" class="modal-backdrop">
+			<button onclick={() => (ubahKelasTerbuka = false)}>close</button>
 		</form>
 	</dialog>
 {/if}

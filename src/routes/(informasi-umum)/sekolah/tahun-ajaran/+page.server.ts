@@ -1,6 +1,6 @@
 import db from '$lib/server/db';
 import { tableKelas, tableSekolah, tableSemester, tableTahunAjaran } from '$lib/server/db/schema';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { fail, redirect } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import { authority } from '../../../pengguna/utils.server';
@@ -15,9 +15,33 @@ type TahunAjaranWithMeta = typeof tableTahunAjaran.$inferSelect & {
 	rombel: number;
 };
 
-async function getTahunAjaran(sekolahId: number): Promise<TahunAjaranWithMeta[]> {
+/** ID tahun ajaran yang punya semester cocok dengan pola q (dipakai via inArray —
+ *  subquery terkorelasi tidak bisa dipakai karena drizzle meng-alias tabel luar). */
+async function cariTahunAjaranViaSemester(searchPattern: string): Promise<number[]> {
+	const rows = await db
+		.select({ tahunAjaranId: tableSemester.tahunAjaranId })
+		.from(tableSemester)
+		.where(like(tableSemester.nama, searchPattern));
+	return rows.map((row) => row.tahunAjaranId);
+}
+
+async function getTahunAjaran(sekolahId: number, q?: string): Promise<TahunAjaranWithMeta[]> {
+	const searchPattern = q ? `%${q}%` : '';
+	const semesterIds = searchPattern ? await cariTahunAjaranViaSemester(searchPattern) : [];
+
+	const searchCondition = searchPattern
+		? or(
+				like(tableTahunAjaran.nama, searchPattern),
+				semesterIds.length ? inArray(tableTahunAjaran.id, semesterIds) : undefined
+			)
+		: undefined;
+
+	const whereCondition = searchCondition
+		? and(eq(tableTahunAjaran.sekolahId, sekolahId), searchCondition)
+		: eq(tableTahunAjaran.sekolahId, sekolahId);
+
 	const tahunAjaranRows = await db.query.tableTahunAjaran.findMany({
-		where: eq(tableTahunAjaran.sekolahId, sekolahId),
+		where: whereCondition,
 		orderBy: [desc(tableTahunAjaran.id)],
 		with: { semester: true }
 	});
@@ -55,6 +79,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		throw redirect(303, '/sekolah/form?init');
 	}
 
+	const q = url.searchParams.get('q')?.trim() ?? '';
+
 	const requestedId = Number(url.searchParams.get('sekolahId'));
 	const validRequested =
 		Number.isFinite(requestedId) && sekolahList.some((item) => item.id === requestedId);
@@ -78,14 +104,54 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			})
 		: null;
 
-	const tahunAjaran = selectedSekolahId ? await getTahunAjaran(selectedSekolahId) : [];
+	let totalSemua = 0;
+	let totalFiltered = 0;
+	let tahunAjaran: TahunAjaranWithMeta[] = [];
+
+	if (selectedSekolahId) {
+		const searchPattern = q ? `%${q}%` : '';
+		const semesterIds = searchPattern ? await cariTahunAjaranViaSemester(searchPattern) : [];
+
+		const searchCondition = searchPattern
+			? or(
+					like(tableTahunAjaran.nama, searchPattern),
+					semesterIds.length ? inArray(tableTahunAjaran.id, semesterIds) : undefined
+				)
+			: undefined;
+
+		const whereCondition = searchCondition
+			? and(eq(tableTahunAjaran.sekolahId, selectedSekolahId), searchCondition)
+			: eq(tableTahunAjaran.sekolahId, selectedSekolahId);
+
+		const [countSemuaRows, countFilteredRows, items] = await Promise.all([
+			db
+				.select({ count: sql<number>`count(*)` })
+				.from(tableTahunAjaran)
+				.where(eq(tableTahunAjaran.sekolahId, selectedSekolahId)),
+			db
+				.select({ count: sql<number>`count(*)` })
+				.from(tableTahunAjaran)
+				.where(whereCondition),
+			getTahunAjaran(selectedSekolahId, q)
+		]);
+
+		totalSemua = Number(countSemuaRows[0]?.count ?? 0);
+		totalFiltered = Number(countFilteredRows[0]?.count ?? 0);
+		tahunAjaran = items;
+	}
+
+	const kosongKarenaFilter = totalSemua > 0 && totalFiltered === 0 && Boolean(q);
 
 	return {
 		meta,
 		sekolahList,
 		selectedSekolahId,
 		selectedSekolah,
-		tahunAjaran
+		tahunAjaran,
+		q,
+		totalSemua,
+		totalFiltered,
+		kosongKarenaFilter
 	};
 };
 

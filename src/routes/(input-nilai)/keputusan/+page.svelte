@@ -4,8 +4,9 @@
 	import Icon from '$lib/components/icon.svelte';
 	import FormEnhance from '$lib/components/form-enhance.svelte';
 	import { searchQueryMarker } from '$lib/utils';
-	import { onDestroy } from 'svelte';
 	import SvelteURLSearchParams from '$lib/svelte-helpers/url-search-params';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 
 	type KeputusanRow = {
 		id: number;
@@ -31,6 +32,8 @@
 
 	let { data }: { data: PageData } = $props();
 
+	const KUNCI_FILTER = ['q'];
+
 	const kelasAktif = $derived(page.data.kelasAktif ?? null);
 	const kelasAktifLabel = $derived.by(() => {
 		if (!kelasAktif) return null;
@@ -53,64 +56,16 @@
 
 	// svelte-ignore state_referenced_locally
 	let searchTerm = $state(data.page.search ?? '');
-	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 	$effect(() => {
-		if (searchTimer) return;
 		const latestSearchTerm = data.page.search ?? '';
 		if (searchTerm !== latestSearchTerm) {
 			searchTerm = latestSearchTerm;
 		}
 	});
 
-	function buildSearchUrl(rawValue: string) {
-		const params = new SvelteURLSearchParams(page.url.search);
-		const cleaned = rawValue.trim();
-		const current = params.get('q') ?? '';
-		const searchChanged = cleaned !== current;
-		if (cleaned) {
-			params.set('q', cleaned);
-		} else {
-			params.delete('q');
-		}
-		if (searchChanged) {
-			params.delete('page');
-		}
-		const nextQuery = params.toString();
-		const nextUrl = `${page.url.pathname}${nextQuery ? `?${nextQuery}` : ''}`;
-		const currentUrl = `${page.url.pathname}${page.url.search}`;
-		if (nextUrl === currentUrl) {
-			return null;
-		}
-		return nextUrl;
-	}
-
-	async function applySearch(rawValue: string) {
-		const target = buildSearchUrl(rawValue);
-		if (!target) return;
-		searchTimer = undefined;
-		await goto(target, { replaceState: true, keepFocus: true });
-	}
-
-	function handleSearchInput(event: Event) {
-		const value = (event.currentTarget as HTMLInputElement).value;
-		searchTerm = value;
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = setTimeout(() => {
-			searchTimer = undefined;
-			void applySearch(value);
-		}, 400);
-	}
-
-	function submitSearch(event: Event) {
-		event.preventDefault();
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = undefined;
-		void applySearch(searchTerm);
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
 	}
 
 	function buildPageUrl(pageNumber: number) {
@@ -140,13 +95,6 @@
 		if (pageNumber === currentPage) return;
 		void gotoPage(pageNumber);
 	}
-
-	onDestroy(() => {
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = undefined;
-	});
 
 	let isEditing = $state(false);
 	let editingSubmitting = $state(false);
@@ -247,26 +195,16 @@
 		</div>
 	</div>
 
-	<form
-		class="flex flex-col gap-2 sm:flex-row"
-		data-sveltekit-keepfocus
-		data-sveltekit-replacestate
-		autocomplete="off"
-		spellcheck="false"
-		onsubmit={submitSearch}
-	>
-		<label class="input bg-base-200 dark:bg-base-300 w-full dark:border-none">
-			<Icon name="search" />
-			<input
-				type="search"
-				name="q"
-				value={searchTerm}
-				placeholder="Cari nama murid..."
-				oninput={handleSearchInput}
-				autocomplete="off"
-			/>
-		</label>
-	</form>
+	<div class="mb-4 flex flex-col gap-2 sm:flex-row">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder="Cari nama murid..."
+			onSearch={(value) => terapkanFilter('q', value)}
+			aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+			onReset={() =>
+				goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+		/>
+	</div>
 
 	{#if !hasMurid}
 		<div class="alert alert-soft alert-warning mt-6">

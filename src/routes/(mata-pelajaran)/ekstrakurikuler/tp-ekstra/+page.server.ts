@@ -1,7 +1,7 @@
 import db from '$lib/server/db';
 import { tableEkstrakurikuler, tableEkstrakurikulerTujuan } from '$lib/server/db/schema';
 import { fail, redirect, error } from '@sveltejs/kit';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, like, sql } from 'drizzle-orm';
 import { authority } from '../../../pengguna/utils.server';
 
 const TABLE_EKSTRA_MISSING_MESSAGE =
@@ -43,6 +43,10 @@ export async function load({ depends, url, parent }) {
 		throw error(400, 'ID ekstrakurikuler tidak valid');
 	}
 
+	const q = url.searchParams.get('q')?.trim() ?? '';
+	const searchCondition = q ? like(tableEkstrakurikulerTujuan.deskripsi, `%${q}%`) : undefined;
+
+	let totalAll = 0;
 	let ekstrakurikuler: Ekstrakurikuler | null;
 	let tujuan: EkstrakurikulerTujuan[];
 	let tujuanTableReady = true;
@@ -67,9 +71,19 @@ export async function load({ depends, url, parent }) {
 		throw error(403, 'Ekstrakurikuler tidak termasuk dalam kelas aktif');
 	}
 
+	const baseScope = eq(tableEkstrakurikulerTujuan.ekstrakurikulerId, ekstrakurikulerId);
+
 	try {
+		const [countRes] = await db
+			.select({ count: sql<number>`count(*)` })
+			.from(tableEkstrakurikulerTujuan)
+			.where(baseScope);
+		totalAll = countRes?.count ?? 0;
+
+		const rowCondition = searchCondition ? and(baseScope, searchCondition) : baseScope;
+
 		tujuan = await db.query.tableEkstrakurikulerTujuan.findMany({
-			where: eq(tableEkstrakurikulerTujuan.ekstrakurikulerId, ekstrakurikulerId),
+			where: rowCondition,
 			orderBy: asc(tableEkstrakurikulerTujuan.createdAt)
 		});
 	} catch (err) {
@@ -89,7 +103,9 @@ export async function load({ depends, url, parent }) {
 		meta,
 		ekstrakurikuler,
 		tujuan,
-		tujuanTableReady
+		tujuanTableReady,
+		q,
+		kosongKarenaFilter: totalAll > 0 && tujuan.length === 0 && Boolean(q)
 	};
 }
 

@@ -356,6 +356,11 @@ export async function pushMasterDataToCloud(sekolahId: number, userId: number | 
 		};
 	}
 
+	const mirror = await mirrorMasterDataToCloud(sekolahId, userId);
+	if (!mirror.success) {
+		console.warn('[cloud-master] mirror data pusat gagal:', mirror.message);
+	}
+
 	return {
 		success: true,
 		message: `Master data terkirim ke Database Pusat (${totalRecords} baris).`,
@@ -363,6 +368,124 @@ export async function pushMasterDataToCloud(sekolahId: number, userId: number | 
 		counts,
 		checksum
 	};
+}
+
+/** Endpoint D1 HTTP menolak >100 parameter per statement; chunk per kolom. */
+const MIRROR_MAX_PARAMS = 100;
+
+function camelToSnake(name: string): string {
+	return name.replace(/([A-Z])/g, '_$1').toLowerCase();
+}
+
+/** Nilai lokal (bentuk drizzle/libsql) → parameter yang bisa di-bind worker D1. */
+function toD1Param(value: unknown): unknown {
+	if (value === null || value === undefined) return null;
+	if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') {
+		return value;
+	}
+	if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+		return Array.from(new Uint8Array(value));
+	}
+	return String(value);
+}
+
+/**
+ * Mirror satu daftar tabel lokal langsung ke tabel DATA di Database Pusat (bukan
+ * ke tabel `packages`). ID baris lokal installer sama dengan ID di D1 pusat,
+ * jadi baris ditulis apa adanya berdasarkan PK: `ON CONFLICT(id) DO UPDATE`.
+ * Kolom yang ditulis = irisan kolom D1 nyata dengan skema lokal (via
+ * `PRAGMA table_info`), sehingga beda nama/sisa kolom lama tidak merusak insert.
+ *
+ * Tabel penghubung tanpa constraint unik selain PK dibersihkan dulu supaya
+ * baris yang dihapus lokal ikut hilang di pusat.
+ */
+async function mirrorTablesToCloud(
+	config: D1Config,
+	tables: readonly [string, SQLiteTable][]
+): Promise<{ mirrored: number; skipped: string[] }> {
+	const JOINT_TABLES = new Set(['auth_user_mata_pelajaran', 'auth_user_kelas', 'murid_mata_pelajaran']);
+	let mirrored = 0;
+	const skipped: string[] = [];
+
+	for (const [name, table] of tables) {
+		const camelColumns = Object.keys(getTableColumns(table));
+		const localSnake = new Map(camelColumns.map((c) => [camelToSnake(c), c] as const));
+		const rows = (await db.select().from(table)) as unknown as Record<string, unknown>[];
+		if (rows.length === 0) continue;
+
+		try {
+			// Ambil kolom yang BENAR-BENAR ada di D1 pusat; tulis hanya irisan
+			// dengan skema lokal agar beda nama/sisa kolom lama tidak merusak insert.
+			const info = await executeD1Query(config, `PRAGMA table_info(${name})`);
+			if (!info.success) throw new Error(info.error ?? `baca skema ${name} gagal`);
+			const infoRows = extractRows(info.result);
+			const d1Columns = infoRows
+				.map((r) => String(r.name))
+				.filter((col) => localSnake.has(col));
+			if (d1Columns.length === 0) {
+				skipped.push(name);
+				continue;
+			}
+
+			if (JOINT_TABLES.has(name)) {
+				const del = await executeD1Query(config, `DELETE FROM ${name}`);
+				if (!del.success) throw new Error(del.error ?? `hapus ${name} gagal`);
+			}
+
+			const maxRows = Math.max(1, Math.floor(MIRROR_MAX_PARAMS / d1Columns.length));
+			for (let start = 0; start < rows.length; start += maxRows) {
+				const chunk = rows.slice(start, start + maxRows);
+				const valuesParts: string[] = [];
+				const params: unknown[] = [];
+				for (const row of chunk) {
+					params.push(
+						...d1Columns.map((col) => toD1Param(row[localSnake.get(col) as string]))
+					);
+					valuesParts.push(`(${d1Columns.map(() => '?').join(', ')})`);
+				}
+				const updates = d1Columns
+					.filter((c) => c !== 'id')
+					.map((c) => `${c} = excluded.${c}`)
+					.join(', ');
+				const sql = `INSERT INTO ${name} (${d1Columns.join(', ')}) VALUES ${valuesParts.join(', ')}
+				 ON CONFLICT(id) DO UPDATE SET ${updates}`;
+				const res = await executeD1Query(config, sql, params);
+				if (!res.success) throw new Error(res.error ?? `insert ${name} gagal`);
+			}
+			mirrored += rows.length;
+		} catch (err: unknown) {
+			skipped.push(name);
+			console.warn(`[cloud-master] mirror tabel ${name} gagal:`, err);
+		}
+	}
+
+	return { mirrored, skipped };
+}
+
+/**
+ * Mirror seluruh tabel master lokal ke Database Pusat. Panggil setelah paket
+ * master berhasil ditulis ke `packages`.
+ */
+export async function mirrorMasterDataToCloud(
+	sekolahId: number,
+	userId: number | null
+): Promise<{ success: boolean; message: string; mirrored: number; skipped: string[] }> {
+	const config = await getD1Config(sekolahId);
+	if (!d1CredentialsReady(config)) {
+		return {
+			success: false,
+			message: 'Kredensial Database Pusat belum siap, data tidak dimirror.',
+			mirrored: 0,
+			skipped: []
+		};
+	}
+
+	const { mirrored, skipped } = await mirrorTablesToCloud(config, MASTER_TABLES);
+	const message =
+		skipped.length === 0
+			? `Data dimirror ke Database Pusat (${mirrored} baris).`
+			: `Mirror sebagian: ${mirrored} baris, tabel gagal: ${skipped.join(', ')}.`;
+	return { success: skipped.length === 0, message, mirrored, skipped };
 }
 
 /** Sisipkan baris ke tabel lokal lewat koneksi/transaksi yang diberikan. */
@@ -1058,9 +1181,27 @@ export async function pushAllDataToCloud(
 		});
 	}
 
+	// Mirror data langsung ke tabel DATA D1 supaya aplikasi web (yang memakai
+	// D1 sebagai database) langsung melihat perubahan ini — paket di `packages`
+	// saja tidak dibaca web. Hanya tabel yang ikut push; gagal parsial tidak
+	// membatalkan push paket.
+	const academicTables = [...AKADEMIK_FULL_TABLES, ...AKADEMIK_DELTA_TABLES];
+	const mirrorTables: [string, SQLiteTable][] = [];
+	if (includeMaster) mirrorTables.push(...MASTER_TABLES);
+	for (const [name, table] of academicTables) {
+		if (!tablesFilter || tablesFilter.includes(name)) mirrorTables.push([name, table]);
+	}
+	const mirror = await mirrorTablesToCloud(config, mirrorTables);
+	if (mirror.skipped.length > 0) {
+		console.warn(
+			'[cloud-master] mirror web sebagian gagal, tabel:',
+			mirror.skipped.join(', ')
+		);
+	}
+
 	return {
 		success: true,
-		message: `Sinkron terkirim: ${totalDeltaRows} baris berubah (total paket ${totalRecords} baris).`,
+		message: `Sinkron terkirim: ${totalDeltaRows} baris berubah (total paket ${totalRecords} baris). Mirror web: ${mirror.mirrored} baris.`,
 		totalDeltaRecords: totalDeltaRows,
 		counts
 	};

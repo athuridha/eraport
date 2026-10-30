@@ -275,7 +275,9 @@ async function createUser(request: Request) {
 		if (nama) {
 			const [p] = await db
 				.insert(tablePegawai)
-				.values({ nama, nip: '', nik: nik || null })
+				// sekolahId diisi supaya pegawai ikut muncul di dropdown relasi
+				// (filter loadOpsiRelasi per sekolah).
+				.values({ nama, nip: '', nik: nik || null, sekolahId })
 				.returning({ id: tablePegawai.id });
 			if (p && typeof p.id === 'number') pegawaiId = p.id;
 		}
@@ -493,12 +495,12 @@ async function updateUser(request: Request, id: number) {
 			if (nama && existing.pegawaiId) {
 				await tx
 					.update(tablePegawai)
-					.set({ nama, nik: nik || null })
+					.set({ nama, nik: nik || null, sekolahId: sekolahId ?? null })
 					.where(eq(tablePegawai.id, existing.pegawaiId));
 			} else if (nama && !existing.pegawaiId) {
 				const [p] = await tx
 					.insert(tablePegawai)
-					.values({ nama, nip: '', nik: nik || null })
+					.values({ nama, nip: '', nik: nik || null, sekolahId })
 					.returning({ id: tablePegawai.id });
 				if (p) await tx.update(u).set({ pegawaiId: p.id }).where(eq(u.id, id));
 			}

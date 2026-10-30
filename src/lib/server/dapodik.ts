@@ -511,6 +511,14 @@ async function createSekolahFromDapodik(
 			...(dapodikSekolahId ? { dapodikSekolahId } : {})
 		})
 		.returning({ id: tableSekolah.id });
+	// Pegawai placeholder kepala dibuat sebelum sekolah ada; ikat sekarang
+	// supaya muncul di dropdown relasi (filter per sekolah).
+	if (sekolah?.id && kepala?.id) {
+		await db
+			.update(tablePegawai)
+			.set({ sekolahId: sekolah.id })
+			.where(eq(tablePegawai.id, kepala.id));
+	}
 	return sekolah!.id;
 }
 

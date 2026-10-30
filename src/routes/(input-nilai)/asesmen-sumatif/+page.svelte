@@ -2,10 +2,11 @@
 	/* eslint-disable @typescript-eslint/no-explicit-any -- file-level: many intentional href/goto usages and loose any/unused vars */
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
 	import Icon from '$lib/components/icon.svelte';
 	import KelasKontenPicker from '$lib/components/kelas-konten-picker.svelte';
-	import { autoSubmit, searchQueryMarker } from '$lib/utils';
-	import { onDestroy } from 'svelte';
+	import { searchQueryMarker } from '$lib/utils';
+	import { countActiveFilters, resetFilters, setFilter } from '$lib/utils/url-filter';
 	import { toast } from '$lib/components/toast.svelte';
 	import { invalidate } from '$app/navigation';
 
@@ -53,11 +54,16 @@
 
 	let { data }: { data: PageData } = $props();
 
+	const KUNCI_FILTER = ['q', 'mapel_id'];
+
 	// svelte-ignore state_referenced_locally
 	let selectedMapelValue = $state(data.selectedMapelValue ?? '');
 	// svelte-ignore state_referenced_locally
 	let searchTerm = $state(data.page.search ?? '');
-	let searchTimer: ReturnType<typeof setTimeout> | undefined;
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
 
 	// Restrict editing for wali_asuh
 	const canEdit = $derived.by(() => {
@@ -484,7 +490,6 @@
 	});
 
 	$effect(() => {
-		if (searchTimer) return;
 		const latestSearch = data.page.search ?? '';
 		if (searchTerm !== latestSearch) {
 			searchTerm = latestSearch;
@@ -503,35 +508,6 @@
 	function formatScore(value: number | null) {
 		if (value == null || Number.isNaN(value)) return '—';
 		return value.toFixed(2);
-	}
-
-	function buildSearchUrl(rawValue: string) {
-		const params = new SvelteURLSearchParams(page.url.search);
-		const cleaned = rawValue.trim();
-		const current = params.get('q') ?? '';
-		const searchChanged = cleaned !== current;
-		if (cleaned) {
-			params.set('q', cleaned);
-		} else {
-			params.delete('q');
-		}
-		if (searchChanged) {
-			params.delete('page');
-		}
-		const nextQuery = params.toString();
-		const nextUrl = `${page.url.pathname}${nextQuery ? `?${nextQuery}` : ''}`;
-		const currentUrl = `${page.url.pathname}${page.url.search}`;
-		if (nextUrl === currentUrl) {
-			return null;
-		}
-		return nextUrl;
-	}
-
-	async function applySearch(rawValue: string) {
-		const target = buildSearchUrl(rawValue);
-		if (!target) return;
-		searchTimer = undefined;
-		await goto(target, { replaceState: true, keepFocus: true });
 	}
 
 	function buildPageUrl(pageNumber: number) {
@@ -561,34 +537,6 @@
 		if (pageNumber === currentPage) return;
 		void gotoPageNumber(pageNumber);
 	}
-
-	function handleSearchInput(event: Event) {
-		const value = (event.currentTarget as HTMLInputElement).value;
-		searchTerm = value;
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = setTimeout(() => {
-			searchTimer = undefined;
-			void applySearch(value);
-		}, 400);
-	}
-
-	function submitSearch(event: Event) {
-		event.preventDefault();
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-			searchTimer = undefined;
-		}
-		void applySearch(searchTerm);
-	}
-
-	onDestroy(() => {
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-			searchTimer = undefined;
-		}
-	});
 </script>
 
 <div class="card bg-base-100 cursor-default rounded-lg border-none p-4 shadow-md">
@@ -626,30 +574,26 @@
 		</div>
 	</div>
 
-	<div class="flex flex-col justify-between gap-2 sm:flex-row sm:flex-wrap">
-		<form class="w-full sm:max-w-80 md:max-w-80" method="get" use:autoSubmit>
-			<select
-				class="select bg-base-200 w-full truncate dark:border-none"
-				title="Pilih mata pelajaran"
-				name="mapel_id"
-				bind:value={selectedMapelValue}
-				disabled={!hasMapel}
-			>
-				{#if !hasMapel}
-					<option value="">Belum ada mata pelajaran</option>
-				{:else}
-					<option value="" disabled selected={selectedMapelValue === ''}>
-						Pilih Mata Pelajaran
-					</option>
-					{#each data.mapelList as mapel (mapel.value)}
-						<option value={mapel.value}>{mapel.nama}</option>
-					{/each}
-				{/if}
-			</select>
-			{#if searchTerm.trim().length}
-				<input type="hidden" name="q" value={searchTerm.trim()} />
-			{/if}
-		</form>
+	<FilterToolbar
+		bind:q={searchTerm}
+		qPlaceholder="Cari nama murid..."
+		onSearch={(value) => terapkanFilter('q', value)}
+		pilih={[
+			{
+				name: 'mapel_id',
+				label: 'Mata Pelajaran',
+				value: data.selectedMapelValue ?? '',
+				opsis: [
+					{ value: '', label: 'Semua Mapel' },
+					...data.mapelList.map((m) => ({ value: m.value, label: m.nama }))
+				],
+				onChange: (v) => terapkanFilter('mapel_id', v)
+			}
+		]}
+		aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+		onReset={() =>
+			goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+	>
 		<div class="flex flex-col gap-2 sm:flex-row">
 			<button
 				class="btn btn-soft shadow-none"
@@ -670,27 +614,7 @@
 				Import Nilai
 			</button>
 		</div>
-	</div>
-
-	<form
-		class="mt-2 w-full"
-		data-sveltekit-keepfocus
-		data-sveltekit-replacestate
-		onsubmit={submitSearch}
-	>
-		<label class="input bg-base-200 dark:bg-base-300 w-full dark:border-none">
-			<Icon name="search" />
-			<input
-				type="search"
-				name="q"
-				value={searchTerm}
-				spellcheck="false"
-				autocomplete="name"
-				placeholder="Cari nama murid..."
-				oninput={handleSearchInput}
-			/>
-		</label>
-	</form>
+	</FilterToolbar>
 
 	{#if !hasMapel}
 		<div class="alert alert-soft alert-info mt-6">

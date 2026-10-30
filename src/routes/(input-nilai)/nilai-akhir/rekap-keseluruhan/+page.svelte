@@ -5,8 +5,12 @@
 	import PindahMuridModal from '$lib/components/murid/pindah-murid-modal.svelte';
 	import { buildPageNumbers, OPSI_BARIS_PER_HALAMAN } from '$lib/utils/pagination';
 	import { selectAll, semuaTerpilih, toggleId } from '$lib/utils/bulk-select';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 
 	let { data } = $props();
+
+	const KUNCI_FILTER = ['q', 'kelas_id', 'mapel', 'pengampu_id'];
 
 	// svelte-ignore state_referenced_locally
 	let searchTerm = $state(data.page.q ?? '');
@@ -42,24 +46,15 @@
 	);
 	const idsHalaman = $derived(baris.map((row) => row.muridId));
 
-	async function setFilter(key: string, value: string | null) {
-		const search = new URLSearchParams(page.url.search);
-		if (value) search.set(key, value);
-		else search.delete(key);
-		search.delete('page');
-		const query = search.toString();
-		await goto(`${page.url.pathname}${query ? `?${query}` : ''}`, { keepFocus: true });
-	}
+	$effect(() => {
+		const latestSearchTerm = data.page.q ?? '';
+		if (searchTerm !== latestSearchTerm) {
+			searchTerm = latestSearchTerm;
+		}
+	});
 
-	async function applySearch(value: string) {
-		const search = new URLSearchParams(page.url.search);
-		if (value.trim()) search.set('q', value.trim());
-		else search.delete('q');
-		search.delete('page');
-		const query = search.toString();
-		const target = `${page.url.pathname}${query ? `?${query}` : ''}`;
-		if (target === `${page.url.pathname}${page.url.search}`) return;
-		await goto(target, { keepFocus: true });
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
 	}
 
 	async function gotoPage(pageNumber: number) {
@@ -69,10 +64,10 @@
 	}
 
 	async function gotoPerHalaman(jumlah: number) {
-		const search = new URLSearchParams(page.url.search);
-		search.set('per_page', String(jumlah));
-		search.delete('page');
-		await goto(`${page.url.pathname}?${search.toString()}`, { keepFocus: true });
+		await goto(setFilter(page.url, 'per_page', String(jumlah)), {
+			replaceState: true,
+			keepFocus: true
+		});
 	}
 
 	function formatScore(value: number | null | undefined) {
@@ -166,66 +161,67 @@
 	</div>
 </div>
 
-<div class="mt-4 grid gap-3 md:grid-cols-4">
-	<label class="form-control">
-		<span class="label-text mb-1 text-sm">Kelas</span>
+<div class="mt-4 mb-4 flex flex-col gap-2 sm:flex-row">
+	<FilterToolbar
+		bind:q={searchTerm}
+		qPlaceholder="Nama / NIS..."
+		onSearch={(value) => terapkanFilter('q', value)}
+		pilih={[
+			{
+				name: 'kelas_id',
+				label: 'Kelas',
+				value: filter.kelasId ? String(filter.kelasId) : '',
+				opsis: [
+					{ value: '', label: 'Semua Kelas' },
+					...daftarKelas.map((kelas) => ({
+						value: String(kelas.id),
+						label: `${kelas.nama} — ${kelas.semesterLabel}`
+					}))
+				],
+				onChange: (v) => terapkanFilter('kelas_id', v)
+			},
+			{
+				name: 'mapel',
+				label: 'Mata Pelajaran',
+				value: filter.mapel ?? '',
+				opsis: [
+					{ value: '', label: 'Semua Mata Pelajaran' },
+					...daftarMapel.map((mapel) => ({
+						value: mapel.nama,
+						label: mapel.nama
+					}))
+				],
+				onChange: (v) => terapkanFilter('mapel', v)
+			},
+			{
+				name: 'pengampu_id',
+				label: 'Guru Pengampu',
+				value: filter.pengampuId ? String(filter.pengampuId) : '',
+				opsis: [
+					{ value: '', label: 'Semua Guru' },
+					...daftarGuru.map((guru) => ({
+						value: String(guru.id),
+						label: guru.nama
+					}))
+				],
+				onChange: (v) => terapkanFilter('pengampu_id', v)
+			}
+		]}
+		aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+		onReset={() =>
+			goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+	>
 		<select
-			class="select select-bordered w-full"
-			value={filter.kelasId ?? ''}
-			onchange={(event) =>
-				setFilter('kelas_id', (event.currentTarget as HTMLSelectElement).value || null)}
+			class="select bg-base-200 dark:bg-base-300 w-auto shrink dark:border-none"
+			value={perPage}
+			title="Baris per halaman"
+			onchange={(event) => gotoPerHalaman(Number((event.currentTarget as HTMLSelectElement).value))}
 		>
-			<option value="">Semua Kelas</option>
-			{#each daftarKelas as kelas (kelas.id)}
-				<option value={kelas.id}>{kelas.nama} — {kelas.semesterLabel}</option>
+			{#each OPSI_BARIS_PER_HALAMAN as jumlah (jumlah)}
+				<option value={jumlah}>{jumlah} / hal</option>
 			{/each}
 		</select>
-	</label>
-
-	<label class="form-control">
-		<span class="label-text mb-1 text-sm">Mata Pelajaran</span>
-		<select
-			class="select select-bordered w-full"
-			value={filter.mapel ?? ''}
-			onchange={(event) =>
-				setFilter('mapel', (event.currentTarget as HTMLSelectElement).value || null)}
-		>
-			<option value="">Semua Mata Pelajaran</option>
-			{#each daftarMapel as mapel (mapel.nama)}
-				<option value={mapel.nama}>{mapel.nama}</option>
-			{/each}
-		</select>
-	</label>
-
-	<label class="form-control">
-		<span class="label-text mb-1 text-sm">Guru Pengampu</span>
-		<select
-			class="select select-bordered w-full"
-			value={filter.pengampuId ?? ''}
-			onchange={(event) =>
-				setFilter('pengampu_id', (event.currentTarget as HTMLSelectElement).value || null)}
-		>
-			<option value="">Semua Guru</option>
-			{#each daftarGuru as guru (guru.id)}
-				<option value={guru.id}>{guru.nama}</option>
-			{/each}
-		</select>
-	</label>
-
-	<label class="form-control">
-		<span class="label-text mb-1 text-sm">Cari Murid</span>
-		<label class="input input-bordered flex w-full items-center gap-2">
-			<Icon name="search" />
-			<input
-				type="search"
-				bind:value={searchTerm}
-				spellcheck="false"
-				placeholder="Nama / NIS..."
-				autocomplete="off"
-				onchange={(event) => applySearch((event.currentTarget as HTMLInputElement).value)}
-			/>
-		</label>
-	</label>
+	</FilterToolbar>
 </div>
 
 <div class="mt-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

@@ -4,7 +4,8 @@
 	import Icon from '$lib/components/icon.svelte';
 	import { searchQueryMarker } from '$lib/utils';
 	import { toast } from '$lib/components/toast.svelte';
-	import { onDestroy } from 'svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 	import { showModal } from '$lib/components/global-modal.svelte';
 	import PdfPreviewModal from '$lib/components/cetak/PdfPreviewModal.svelte';
 	import SppdFormModal from '$lib/components/sppd/sppd-form-modal.svelte';
@@ -37,70 +38,42 @@
 
 	let { data }: { data: PageData } = $props();
 
+	const KUNCI_FILTER = ['q', 'dari', 'sampai'];
+
 	const currentPage = $derived.by(() => data.page?.currentPage ?? 1);
 	const totalPages = $derived.by(() => Math.max(1, data.page?.totalPages ?? 1));
 	const pages = $derived.by(() => Array.from({ length: totalPages }, (_, index) => index + 1));
 
 	// svelte-ignore state_referenced_locally
 	let searchTerm = $state(data.page.search ?? '');
-	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 	$effect(() => {
-		if (searchTimer) return;
 		const latestSearchTerm = data.page.search ?? '';
 		if (searchTerm !== latestSearchTerm) {
 			searchTerm = latestSearchTerm;
 		}
 	});
 
-	function buildSearchUrl(rawValue: string) {
-		const params = new SvelteURLSearchParams(page.url.search);
-		const cleaned = rawValue.trim();
-		const current = params.get('q') ?? '';
-		const searchChanged = cleaned !== current;
-		if (cleaned) {
-			params.set('q', cleaned);
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
+
+	async function terapkanTanggal(dari: string, sampai: string) {
+		const next = new URL(page.url.toString());
+		const dariTrimmed = dari.trim();
+		const sampaiTrimmed = sampai.trim();
+		if (dariTrimmed === '') {
+			next.searchParams.delete('dari');
 		} else {
-			params.delete('q');
+			next.searchParams.set('dari', dariTrimmed);
 		}
-		if (searchChanged) {
-			params.delete('page');
+		if (sampaiTrimmed === '') {
+			next.searchParams.delete('sampai');
+		} else {
+			next.searchParams.set('sampai', sampaiTrimmed);
 		}
-		const nextQuery = params.toString();
-		const nextUrl = `${page.url.pathname}${nextQuery ? `?${nextQuery}` : ''}`;
-		const currentUrl = `${page.url.pathname}${page.url.search}`;
-		if (nextUrl === currentUrl) {
-			return null;
-		}
-		return nextUrl;
-	}
-
-	async function applySearch(rawValue: string) {
-		const target = buildSearchUrl(rawValue);
-		if (!target) return;
-		searchTimer = undefined;
-		await goto(target, { replaceState: true, keepFocus: true });
-	}
-
-	function handleSearchInput(event: Event) {
-		const value = (event.currentTarget as HTMLInputElement).value;
-		searchTerm = value;
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = setTimeout(() => {
-			searchTimer = undefined;
-			void applySearch(value);
-		}, 400);
-	}
-
-	function submitSearch(event: Event) {
-		event.preventDefault();
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = undefined;
-		void applySearch(searchTerm);
+		next.searchParams.delete('page');
+		await goto(next, { replaceState: true, keepFocus: true });
 	}
 
 	function buildPageUrl(pageNumber: number) {
@@ -367,13 +340,6 @@
 		});
 	}
 
-	onDestroy(() => {
-		if (searchTimer) {
-			clearTimeout(searchTimer);
-		}
-		searchTimer = undefined;
-	});
-
 	const hasData = $derived(data.permohonanCount > 0 || data.sppdCount > 0);
 	const hasFiltered = $derived(data.page.totalItems > 0);
 </script>
@@ -397,26 +363,21 @@
 		</button>
 	</div>
 
-	<form
-		class="flex flex-col gap-2 sm:flex-row"
-		data-sveltekit-keepfocus
-		data-sveltekit-replacestate
-		autocomplete="off"
-		spellcheck="false"
-		onsubmit={submitSearch}
-	>
-		<label class="input bg-base-200 dark:bg-base-300 w-full dark:border-none">
-			<Icon name="search" />
-			<input
-				type="search"
-				name="q"
-				value={searchTerm}
-				placeholder="Cari keterangan/tujuan perjalanan..."
-				oninput={handleSearchInput}
-				autocomplete="off"
-			/>
-		</label>
-	</form>
+	<div class="mb-4 flex flex-col gap-2 sm:flex-row">
+		<FilterToolbar
+			bind:q={searchTerm}
+			qPlaceholder="Cari keterangan/tujuan perjalanan..."
+			onSearch={(value) => terapkanFilter('q', value)}
+			tanggal={{
+				dari: page.url.searchParams.get('dari') ?? '',
+				sampai: page.url.searchParams.get('sampai') ?? '',
+				onChange: (v) => terapkanTanggal(v.dari, v.sampai)
+			}}
+			aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+			onReset={() =>
+				goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+		/>
+	</div>
 
 	{#if !hasData}
 		<div class="alert alert-soft alert-warning mt-6">

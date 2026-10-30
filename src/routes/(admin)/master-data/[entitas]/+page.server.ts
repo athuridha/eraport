@@ -7,7 +7,8 @@ import {
 	loadOpsiRelasi,
 	simpanAnggotaEkstrakurikuler,
 	simpanMasterData,
-	simpanMasterDataMassal
+	simpanMasterDataMassal,
+	ubahKelasMasterMassal
 } from '$lib/admin/master-data.server';
 import { pindahkanMuridKelas } from '$lib/server/murid-pindah-kelas';
 import { error, fail, redirect } from '@sveltejs/kit';
@@ -140,6 +141,25 @@ export const actions = {
 		return {
 			message: `${terhapus} data dihapus${gagal.length ? `, ${gagal.length} gagal: ${gagal[0]}` : ''}.`
 		};
+	},
+
+	async ubahKelasMassal({ request, locals, params }) {
+		const sekolahId = locals.sekolah?.id;
+		if (!sekolahId) {
+			return fail(401, { fail: 'Sekolah tidak ditemukan' });
+		}
+		const user = locals.user;
+		if (!user || !isAdminUser(user)) {
+			return fail(403, { fail: 'Hanya admin/kepala sekolah yang bisa mengubah master data.' });
+		}
+		if (params.entitas !== 'mata_pelajaran') {
+			return fail(400, { fail: 'Ubah kelas massal hanya tersedia untuk mata pelajaran.' });
+		}
+
+		const formData = await request.formData();
+		const hasil = await ubahKelasMasterMassal(sekolahId, formData);
+		if (hasil.fail) return fail(400, { fail: hasil.fail });
+		return { message: hasil.message };
 	},
 
 	async pindahMurid({ request, locals }) {

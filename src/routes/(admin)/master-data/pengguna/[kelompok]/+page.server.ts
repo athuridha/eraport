@@ -155,6 +155,7 @@ export const load = async ({ params, locals, url }) => {
 	}
 
 	const q = url.searchParams.get('q')?.trim() || null;
+	const role = url.searchParams.get('role')?.trim() || null;
 	const like = `%${q ?? ''}%`;
 	const perHalaman = normalisasiBarisPerHalaman(url.searchParams.get('per_page'), 50);
 	const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
@@ -177,18 +178,35 @@ export const load = async ({ params, locals, url }) => {
 					rolesAda('kepala_sekolah')
 				]
 			: [inArray(tableAuthUser.type, [...kelompok.types]), rolesAda('guru')];
-	const kondisi = [or(...grupKondisi)];
+	const kondisiKelompok = or(...grupKondisi);
+	const kondisi = [kondisiKelompok];
+	if (role) {
+		kondisi.push(eq(tableAuthUser.type, role as typeof tableAuthUser.$inferSelect.type));
+	}
 	if (q) {
 		kondisi.push(
 			sql`(lower(auth_user.username) like ${like} or lower(coalesce(auth_user.nama_lengkap, '')) like ${like} or lower(coalesce(pegawai.nik, '')) like ${like})`
 		);
 	}
 
-	const [{ total }] = await db
-		.select({ total: count() })
-		.from(tableAuthUser)
-		.leftJoin(tablePegawai, eq(tableAuthUser.pegawaiId, tablePegawai.id))
-		.where(and(...kondisi));
+	const [[{ total }], [{ totalAwal }], rawRoles] = await Promise.all([
+		db
+			.select({ total: count() })
+			.from(tableAuthUser)
+			.leftJoin(tablePegawai, eq(tableAuthUser.pegawaiId, tablePegawai.id))
+			.where(and(...kondisi)),
+		db.select({ totalAwal: count() }).from(tableAuthUser).where(kondisiKelompok),
+		db
+			.selectDistinct({ type: tableAuthUser.type })
+			.from(tableAuthUser)
+			.where(kondisiKelompok)
+			.orderBy(asc(tableAuthUser.type))
+	]);
+
+	const opsiRole = rawRoles
+		.map((r) => r.type)
+		.filter((t): t is NonNullable<typeof t> => Boolean(t))
+		.map((t) => ({ value: String(t), label: labelRole(t) }));
 
 	const totalHalaman = Math.max(1, Math.ceil(total / perHalaman));
 	const halamanSekarang = Math.min(page, totalHalaman);
@@ -264,11 +282,13 @@ export const load = async ({ params, locals, url }) => {
 		kelompok: { key, judul: kelompok.judul, deskripsi: kelompok.deskripsi },
 		baris,
 		total,
+		adaDataAwal: totalAwal > 0,
+		opsiRole,
 		totalHalaman,
 		perHalaman,
 		daftarKelas,
 		daftarMapel,
-		filter: { q, page: halamanSekarang, perHalaman }
+		filter: { q, role, page: halamanSekarang, perHalaman }
 	};
 };
 
@@ -396,7 +416,9 @@ export const actions = {
 			if (!pegawaiId) {
 				const [pegawai] = await db
 					.insert(tablePegawai)
-					.values({ nama, nip: username })
+					// sekolahId WAJIB: dropdown relasi (wali kelas dll.) filter pegawai per
+					// sekolah — tanpa ini guru hilang dari form kelas/mapel.
+					.values({ nama, nip: username, sekolahId })
 					.returning({ id: tablePegawai.id });
 				pegawaiId = pegawai?.id ?? null;
 			}
@@ -489,7 +511,7 @@ export const actions = {
 
 			const [pegawai] = await db
 				.insert(tablePegawai)
-				.values({ nama, nip: '', nik: nik || null })
+				.values({ nama, nip: '', nik: nik || null, sekolahId })
 				.returning({ id: tablePegawai.id });
 
 			await db.insert(tableAuthUser).values({

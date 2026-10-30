@@ -47,7 +47,47 @@ function loadDotEnv(fileName = '.env') {
 	}
 }
 
+/**
+ * Kunci yang terdefinisi di sebuah berkas env, dibaca tanpa memengaruhi
+ * `process.env` — dipakai untuk memutuskan pasangan URL + token mana yang sah.
+ */
+function envFileKeys(fileName) {
+	const keys = new Set();
+	try {
+		const envPath = path.resolve(process.cwd(), fileName);
+		if (!fs.existsSync(envPath)) return keys;
+		for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+			const m = line.trim().match(/^([A-Za-z0-9_]+)\s*=/);
+			if (m) keys.add(m[1]);
+		}
+	} catch {
+		// berkas tidak terbaca: anggap tidak punya kunci
+	}
+	return keys;
+}
+
 loadDotEnv();
+
+// `CLOUDFLARE_API_URL` + `CLOUDFLARE_API_TOKEN` adalah satu paket: URL menandakan
+// mode proxy worker, dan yang diperiksa worker adalah kunci statis — bukan token
+// Cloudflare lama. `.env` peninggalan (era token Cloudflare langsung) sering hanya
+// punya token tanpa URL; begitu installer menambahkan URL lewat `.env.default`,
+// token lama itu tetap menang karena loadDotEnv hanya mengisi kunci yang kosong,
+// lalu worker menolak dengan 401 "API key ditolak". Token yatap seperti itu
+// diabaikan supaya kunci statis dari `.env.default` yang dipakai.
+const envKeys = envFileKeys('.env');
+const defaultKeys = envFileKeys('.env.default');
+if (
+	!envKeys.has('CLOUDFLARE_API_URL') &&
+	envKeys.has('CLOUDFLARE_API_TOKEN') &&
+	defaultKeys.has('CLOUDFLARE_API_URL')
+) {
+	delete process.env.CLOUDFLARE_API_TOKEN;
+	console.warn(
+		'[start-build] CLOUDFLARE_API_TOKEN lama di .env diabaikan (tidak ada CLOUDFLARE_API_URL); memakai kunci dari .env.default'
+	);
+}
+
 loadDotEnv('.env.default');
 
 // Helpful debug: show the BODY_SIZE_LIMIT that will be used by the built server

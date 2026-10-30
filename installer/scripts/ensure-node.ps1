@@ -9,7 +9,10 @@ $ErrorActionPreference = 'Stop'
 function Test-NodeBinary {
     param([string]$BinaryPath)
     try {
-        $process = Start-Process -FilePath $BinaryPath -ArgumentList '--version' -WindowStyle Hidden -NoNewWindow -PassThru -Wait -ErrorAction Stop
+        # -WindowStyle dan -NoNewWindow tidak boleh digabung (Start-Process
+        # melempar error), sehingga kombinasi lama selalu gagal dan membuat
+        # runtime bawaan dianggap korup lalu dihapus. Cukup -WindowStyle Hidden.
+        $process = Start-Process -FilePath $BinaryPath -ArgumentList '--version' -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
         return $process.ExitCode -eq 0
     } catch {
         return $false

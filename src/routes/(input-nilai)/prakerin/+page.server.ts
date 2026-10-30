@@ -9,7 +9,7 @@ import {
 	tablePegawai
 } from '$lib/server/db/schema';
 import { fail, redirect } from '@sveltejs/kit';
-import { and, asc, eq, inArray, max } from 'drizzle-orm';
+import { and, asc, eq, inArray, like, max, or, sql } from 'drizzle-orm';
 import { isAuthorizedUser } from '../../pengguna/permissions';
 
 // The PKL tables ship via ensure-ekspansi-modul; pnpm db:push may be pending.
@@ -29,7 +29,7 @@ function textParam(value: FormDataEntryValue | null) {
 	return trimmed ? trimmed : null;
 }
 
-export async function load({ parent, locals, depends }) {
+export async function load({ parent, locals, depends, url }) {
 	depends('app:prakerin');
 
 	if (!locals.user) throw redirect(303, '/login');
@@ -38,6 +38,7 @@ export async function load({ parent, locals, depends }) {
 	const sekolahId = locals.sekolah?.id ?? null;
 	const authorized = isAuthorizedUser(['input_nilai_pkl'], locals.user);
 
+	const q = url.searchParams.get('q')?.trim() ?? '';
 	const meta = { title: 'PKL (Prakerin)' } satisfies PageMeta;
 
 	if (!sekolahId || !authorized) {
@@ -46,6 +47,8 @@ export async function load({ parent, locals, depends }) {
 			authorized,
 			kelasId: null as number | null,
 			semuaKelasMode: kelasAktif === null,
+			q,
+			kosongKarenaFilter: false,
 			perusahaan: [],
 			kelompok: [],
 			tujuan: [],
@@ -72,72 +75,94 @@ export async function load({ parent, locals, depends }) {
 		? eq(tablePklKelompok.sekolahId, sekolahId)
 		: and(eq(tablePklKelompok.sekolahId, sekolahId), eq(tablePklKelompok.kelasId, kelasId!));
 
-	const [perusahaan, kelompok, tujuan, muridList, pegawaiList, daftarKelas] = await Promise.all([
-		db.query.tablePklPerusahaan.findMany({
-			columns: {
-				id: true,
-				nama: true,
-				alamat: true,
-				bidangUsaha: true,
-				pembimbing: true,
-				telepon: true
-			},
-			where: eq(tablePklPerusahaan.sekolahId, sekolahId),
-			orderBy: asc(tablePklPerusahaan.nama)
-		}),
-		db.query.tablePklKelompok.findMany({
-			columns: {
-				id: true,
-				kelasId: true,
-				perusahaanId: true,
-				pembimbingPegawaiId: true,
-				nama: true,
-				skPenugasan: true,
-				tanggalMulai: true,
-				tanggalSelesai: true,
-				lokasi: true,
-				catatan: true
-			},
-			with: {
-				kelas: { columns: { nama: true, fase: true } },
-				perusahaan: { columns: { nama: true } },
-				pembimbing: { columns: { nama: true } },
-				anggota: {
-					columns: { id: true, muridId: true },
-					with: { murid: { columns: { nama: true, nisn: true } } }
-				}
-			},
-			where: kelompokFilter,
-			orderBy: asc(tablePklKelompok.id)
-		}),
-		db.query.tablePklTujuan.findMany({
-			columns: { id: true, urutan: true, deskripsi: true },
-			where: eq(tablePklTujuan.sekolahId, sekolahId),
-			orderBy: asc(tablePklTujuan.urutan)
-		}),
-		// Candidate murid for the member modal (all scoped kelas in sekolah).
-		db
-			.select({ id: tableMurid.id, nama: tableMurid.nama, kelasId: tableMurid.kelasId })
-			.from(tableMurid)
-			.where(eq(tableMurid.sekolahId, sekolahId))
-			.orderBy(asc(tableMurid.nama)),
-		db
-			.select({ id: tablePegawai.id, nama: tablePegawai.nama })
-			.from(tablePegawai)
-			.where(eq(tablePegawai.sekolahId, sekolahId))
-			.orderBy(asc(tablePegawai.nama)),
-		db.query.tableKelas.findMany({
-			columns: { id: true, nama: true, fase: true },
-			where: eq(tableKelas.sekolahId, sekolahId),
-			orderBy: asc(tableKelas.nama)
-		})
-	]);
+	const basePerusahaanWhere = eq(tablePklPerusahaan.sekolahId, sekolahId);
+	const searchCondition = q
+		? or(
+				like(tablePklPerusahaan.nama, `%${q}%`),
+				like(tablePklPerusahaan.alamat, `%${q}%`),
+				like(tablePklPerusahaan.pembimbing, `%${q}%`)
+			)
+		: undefined;
+	const perusahaanWhere = searchCondition
+		? and(basePerusahaanWhere, searchCondition)
+		: basePerusahaanWhere;
+
+	const [countRes, perusahaan, kelompok, tujuan, muridList, pegawaiList, daftarKelas] =
+		await Promise.all([
+			db
+				.select({ count: sql<number>`count(*)` })
+				.from(tablePklPerusahaan)
+				.where(basePerusahaanWhere),
+			db.query.tablePklPerusahaan.findMany({
+				columns: {
+					id: true,
+					nama: true,
+					alamat: true,
+					bidangUsaha: true,
+					pembimbing: true,
+					telepon: true
+				},
+				where: perusahaanWhere,
+				orderBy: asc(tablePklPerusahaan.nama)
+			}),
+			db.query.tablePklKelompok.findMany({
+				columns: {
+					id: true,
+					kelasId: true,
+					perusahaanId: true,
+					pembimbingPegawaiId: true,
+					nama: true,
+					skPenugasan: true,
+					tanggalMulai: true,
+					tanggalSelesai: true,
+					lokasi: true,
+					catatan: true
+				},
+				with: {
+					kelas: { columns: { nama: true, fase: true } },
+					perusahaan: { columns: { nama: true } },
+					pembimbing: { columns: { nama: true } },
+					anggota: {
+						columns: { id: true, muridId: true },
+						with: { murid: { columns: { nama: true, nisn: true } } }
+					}
+				},
+				where: kelompokFilter,
+				orderBy: asc(tablePklKelompok.id)
+			}),
+			db.query.tablePklTujuan.findMany({
+				columns: { id: true, urutan: true, deskripsi: true },
+				where: eq(tablePklTujuan.sekolahId, sekolahId),
+				orderBy: asc(tablePklTujuan.urutan)
+			}),
+			// Candidate murid for the member modal (all scoped kelas in sekolah).
+			db
+				.select({ id: tableMurid.id, nama: tableMurid.nama, kelasId: tableMurid.kelasId })
+				.from(tableMurid)
+				.where(eq(tableMurid.sekolahId, sekolahId))
+				.orderBy(asc(tableMurid.nama)),
+			db
+				.select({ id: tablePegawai.id, nama: tablePegawai.nama })
+				.from(tablePegawai)
+				.where(eq(tablePegawai.sekolahId, sekolahId))
+				.orderBy(asc(tablePegawai.nama)),
+			db.query.tableKelas.findMany({
+				columns: { id: true, nama: true, fase: true },
+				where: eq(tableKelas.sekolahId, sekolahId),
+				orderBy: asc(tableKelas.nama)
+			})
+		]);
+
+	const totalPerusahaan = countRes[0]?.count ?? 0;
+	const kosongKarenaFilter = totalPerusahaan > 0 && perusahaan.length === 0 && Boolean(q);
 
 	return {
 		meta,
 		authorized,
 		kelasId,
 		semuaKelasMode,
+		q,
+		kosongKarenaFilter,
 		perusahaan,
 		kelompok,
 		tujuan,

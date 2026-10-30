@@ -7,7 +7,7 @@ import {
 	tablePoinSiswa
 } from '$lib/server/db/schema';
 import { fail, redirect } from '@sveltejs/kit';
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, like, sql } from 'drizzle-orm';
 import { isAuthorizedUser } from '../../pengguna/permissions';
 
 const REQUIRED_PERMISSION = 'administrasi_poin_siswa';
@@ -77,28 +77,66 @@ async function ambilPelanggaran(sekolahId: number): Promise<PelanggaranRow[]> {
 	}));
 }
 
-async function ambilRekap(sekolahId: number, kelasAktifId: number | null): Promise<MuridRekap[]> {
-	const rows = await db
-		.select({
-			id: tableMurid.id,
-			nama: tableMurid.nama,
-			nisn: tableMurid.nisn,
-			kelasNama: tableKelas.nama,
-			totalPoin: sql<number>`coalesce(sum(${tablePoinPelanggaran.poin}), 0)`,
-			jumlahRiwayat: sql<number>`count(${tablePoinSiswa.id})`
-		})
-		.from(tableMurid)
-		.leftJoin(tableKelas, eq(tableMurid.kelasId, tableKelas.id))
-		.leftJoin(
-			tablePoinSiswa,
-			and(eq(tablePoinSiswa.muridId, tableMurid.id), eq(tablePoinSiswa.sekolahId, sekolahId))
-		)
-		.leftJoin(tablePoinPelanggaran, eq(tablePoinSiswa.pelanggaranId, tablePoinPelanggaran.id))
-		.where(muridScope(sekolahId, kelasAktifId))
-		.groupBy(tableMurid.id, tableMurid.nama, tableMurid.nisn, tableKelas.nama)
-		.orderBy(asc(tableMurid.nama));
+async function ambilRekap(
+	sekolahId: number,
+	kelasAktifId: number | null,
+	q: string,
+	status: 'ada_poin' | 'bersih' | 'semua'
+): Promise<{ rows: MuridRekap[]; totalSemua: number; totalCocok: number }> {
+	const baseScope = muridScope(sekolahId, kelasAktifId);
+	const conditions = [baseScope];
 
-	return rows.map((row) => ({
+	if (q) {
+		conditions.push(like(tableMurid.nama, `%${q}%`));
+	}
+
+	const poinSubquery = sql`exists (
+		select 1 from ${tablePoinSiswa}
+		inner join ${tablePoinPelanggaran} on ${tablePoinPelanggaran.id} = ${tablePoinSiswa.pelanggaranId}
+		where ${tablePoinSiswa.muridId} = ${tableMurid.id}
+		and ${tablePoinSiswa.sekolahId} = ${sekolahId}
+		and ${tablePoinPelanggaran.poin} > 0
+	)`;
+
+	if (status === 'ada_poin') {
+		conditions.push(poinSubquery);
+	} else if (status === 'bersih') {
+		conditions.push(sql`not ${poinSubquery}`);
+	}
+
+	const filter = and(...conditions);
+
+	const [[{ totalSemua }], [{ totalCocok }], rawRows] = await Promise.all([
+		db
+			.select({ totalSemua: sql<number>`count(*)` })
+			.from(tableMurid)
+			.where(baseScope),
+		db
+			.select({ totalCocok: sql<number>`count(*)` })
+			.from(tableMurid)
+			.where(filter),
+		db
+			.select({
+				id: tableMurid.id,
+				nama: tableMurid.nama,
+				nisn: tableMurid.nisn,
+				kelasNama: tableKelas.nama,
+				totalPoin: sql<number>`coalesce(sum(${tablePoinPelanggaran.poin}), 0)`,
+				jumlahRiwayat: sql<number>`count(${tablePoinSiswa.id})`
+			})
+			.from(tableMurid)
+			.leftJoin(tableKelas, eq(tableMurid.kelasId, tableKelas.id))
+			.leftJoin(
+				tablePoinSiswa,
+				and(eq(tablePoinSiswa.muridId, tableMurid.id), eq(tablePoinSiswa.sekolahId, sekolahId))
+			)
+			.leftJoin(tablePoinPelanggaran, eq(tablePoinSiswa.pelanggaranId, tablePoinPelanggaran.id))
+			.where(filter)
+			.groupBy(tableMurid.id, tableMurid.nama, tableMurid.nisn, tableKelas.nama)
+			.orderBy(asc(tableMurid.nama))
+	]);
+
+	const rows = rawRows.map((row) => ({
 		id: row.id,
 		nama: row.nama,
 		nisn: row.nisn,
@@ -106,6 +144,12 @@ async function ambilRekap(sekolahId: number, kelasAktifId: number | null): Promi
 		totalPoin: row.totalPoin ?? 0,
 		jumlahRiwayat: row.jumlahRiwayat ?? 0
 	}));
+
+	return {
+		rows,
+		totalSemua: totalSemua ?? 0,
+		totalCocok: totalCocok ?? 0
+	};
 }
 
 async function ambilRiwayat(sekolahId: number, kelasAktifId: number | null): Promise<RiwayatRow[]> {
@@ -134,7 +178,7 @@ async function ambilRiwayat(sekolahId: number, kelasAktifId: number | null): Pro
 	return rows;
 }
 
-export async function load({ locals, depends, parent }) {
+export async function load({ locals, depends, parent, url }) {
 	depends('app:poin-siswa');
 
 	if (!isAuthorizedUser([REQUIRED_PERMISSION], locals.user)) {
@@ -145,29 +189,46 @@ export async function load({ locals, depends, parent }) {
 	const kelasAktif = parentData.kelasAktif as { id: number; nama: string } | null;
 	const sekolahId = locals.sekolah?.id ?? null;
 
+	const q = (url.searchParams.get('q') ?? '').trim();
+	const rawStatus = url.searchParams.get('status') ?? 'semua';
+	const status: 'ada_poin' | 'bersih' | 'semua' =
+		rawStatus === 'ada_poin' || rawStatus === 'bersih' ? rawStatus : 'semua';
+
 	if (!sekolahId) {
 		return {
 			meta: { title: 'Poin Siswa' } satisfies PageMeta,
 			kelasAktif: null,
 			daftarPelanggaran: [] as PelanggaranRow[],
 			rekap: [] as MuridRekap[],
-			riwayat: [] as RiwayatRow[]
+			riwayat: [] as RiwayatRow[],
+			filter: { q, status },
+			totalSemua: 0,
+			totalCocok: 0,
+			kosongKarenaFilter: false
 		};
 	}
 
 	const kelasAktifId = kelasAktif?.id ?? null;
-	const [daftarPelanggaran, rekap, riwayat] = await Promise.all([
+	const [daftarPelanggaran, rekapResult, riwayat] = await Promise.all([
 		ambilPelanggaran(sekolahId),
-		ambilRekap(sekolahId, kelasAktifId),
+		ambilRekap(sekolahId, kelasAktifId, q, status),
 		ambilRiwayat(sekolahId, kelasAktifId)
 	]);
+
+	const adaFilter = Boolean(q || status !== 'semua');
+	const kosongKarenaFilter =
+		rekapResult.totalSemua > 0 && rekapResult.totalCocok === 0 && adaFilter;
 
 	return {
 		meta: { title: 'Poin Siswa' } satisfies PageMeta,
 		kelasAktif: kelasAktif ?? null,
 		daftarPelanggaran,
-		rekap,
-		riwayat
+		rekap: rekapResult.rows,
+		riwayat,
+		filter: { q, status },
+		totalSemua: rekapResult.totalSemua,
+		totalCocok: rekapResult.totalCocok,
+		kosongKarenaFilter
 	};
 }
 

@@ -1,7 +1,11 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import Icon from '$lib/components/icon.svelte';
 	import FormEnhance from '$lib/components/form-enhance.svelte';
 	import { showModal } from '$lib/components/global-modal.svelte';
+	import FilterToolbar from '$lib/components/table/filter-toolbar.svelte';
+	import { setFilter, resetFilters, countActiveFilters } from '$lib/utils/url-filter';
 
 	type Pelanggaran = {
 		id: number;
@@ -35,9 +39,27 @@
 		daftarPelanggaran: Pelanggaran[];
 		rekap: MuridRekap[];
 		riwayat: Riwayat[];
+		filter?: { q: string; status: 'ada_poin' | 'bersih' | 'semua' };
+		kosongKarenaFilter: boolean;
 	};
 
 	let { data }: { data: PageData } = $props();
+
+	const KUNCI_FILTER = ['q', 'status'];
+
+	// svelte-ignore state_referenced_locally
+	let searchTerm = $state(data.filter?.q ?? '');
+
+	$effect(() => {
+		const latest = data.filter?.q ?? '';
+		if (searchTerm !== latest) {
+			searchTerm = latest;
+		}
+	});
+
+	async function terapkanFilter(key: string, value: string) {
+		await goto(setFilter(page.url, key, value), { replaceState: true, keepFocus: true });
+	}
 
 	const today = $derived(new Date().toISOString().slice(0, 10));
 
@@ -138,23 +160,14 @@
 	}
 
 	const adaKelasAktif = $derived(!!data.kelasAktif);
-	let filterStatusPoin = $state<'semua' | 'ada_poin' | 'bersih'>('semua');
-	let searchNama = $state('');
+	const statusPoin = $derived(page.url.searchParams.get('status') ?? 'semua');
 
 	// Group students per class when browsing all classes (admin mode),
 	// otherwise they already belong to the active class.
 	const rekapGrup = $derived.by(() => {
-		const q = searchNama.trim().toLowerCase();
-		const filteredMurids = data.rekap.filter((m) => {
-			if (q && !m.nama.toLowerCase().includes(q)) return false;
-			if (filterStatusPoin === 'ada_poin') return m.totalPoin > 0;
-			if (filterStatusPoin === 'bersih') return m.totalPoin === 0;
-			return true;
-		});
-
-		if (adaKelasAktif) return [{ kelasNama: data.kelasAktif!.nama, murid: filteredMurids }];
+		if (adaKelasAktif) return [{ kelasNama: data.kelasAktif!.nama, murid: data.rekap }];
 		const map = new Map<string, MuridRekap[]>();
-		for (const murid of filteredMurids) {
+		for (const murid of data.rekap) {
 			const key = murid.kelasNama ?? '(Tanpa Kelas)';
 			const list = map.get(key);
 			if (list) list.push(murid);
@@ -235,57 +248,55 @@
 		<!-- Rekap murid + riwayat -->
 		<div class="flex flex-col gap-4">
 			<div class="card bg-base-200/50 rounded-md p-3">
-				<div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+				<div class="mb-3 flex flex-col gap-2">
 					<h3 class="font-bold">Rekap Murid</h3>
 
-					<div class="flex flex-wrap items-center gap-2">
+					<FilterToolbar
+						bind:q={searchTerm}
+						qPlaceholder="Cari nama murid..."
+						onSearch={(value) => terapkanFilter('q', value)}
+						aktif={countActiveFilters(page.url, KUNCI_FILTER)}
+						onReset={() =>
+							goto(resetFilters(page.url, KUNCI_FILTER), { replaceState: true, keepFocus: true })}
+					>
 						<!-- Filter Status Poin -->
 						<div class="join">
 							<button
 								type="button"
 								class="btn btn-xs join-item"
-								class:btn-active={filterStatusPoin === 'semua'}
-								onclick={() => (filterStatusPoin = 'semua')}
+								class:btn-active={statusPoin === 'semua'}
+								onclick={() => terapkanFilter('status', 'semua')}
 							>
 								Semua
 							</button>
 							<button
 								type="button"
 								class="btn btn-xs join-item"
-								class:btn-active={filterStatusPoin === 'ada_poin'}
-								onclick={() => (filterStatusPoin = 'ada_poin')}
+								class:btn-active={statusPoin === 'ada_poin'}
+								onclick={() => terapkanFilter('status', 'ada_poin')}
 							>
 								Ada Poin
 							</button>
 							<button
 								type="button"
 								class="btn btn-xs join-item"
-								class:btn-active={filterStatusPoin === 'bersih'}
-								onclick={() => (filterStatusPoin = 'bersih')}
+								class:btn-active={statusPoin === 'bersih'}
+								onclick={() => terapkanFilter('status', 'bersih')}
 							>
 								Bersih (0)
 							</button>
 						</div>
-
-						<!-- Search Murid -->
-						<label
-							class="input input-xs bg-base-100 flex items-center gap-1.5 rounded-lg border border-base-300"
-						>
-							<Icon name="search" />
-							<input
-								type="search"
-								placeholder="Cari murid..."
-								class="grow"
-								bind:value={searchNama}
-							/>
-						</label>
-					</div>
+					</FilterToolbar>
 				</div>
 
 				{#if !data.rekap.length}
 					<div class="alert alert-soft alert-info">
 						<Icon name="info" />
-						<span>Belum ada murid pada cakupan ini.</span>
+						<span>
+							{data.kosongKarenaFilter
+								? 'Tidak ada murid yang cocok dengan filter.'
+								: 'Belum ada murid pada cakupan ini.'}
+						</span>
 					</div>
 				{:else}
 					{#each rekapGrup as grup, index (grup.kelasNama)}
