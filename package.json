@@ -1,7 +1,7 @@
 {
 	"name": "erapor-pmk",
 	"private": true,
-	"version": "0.1.6",
+	"version": "0.1.7",
 	"type": "module",
 	"scripts": {
 		"db:push": "node scripts/migrate-installed-db.mjs",
